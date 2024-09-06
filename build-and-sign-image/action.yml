@@ -1,0 +1,114 @@
+name: Build and Sign Image
+description: |
+  Build and sign images
+
+inputs:
+  component:
+    description: 'Component image to build'
+    required: true
+  event:
+    description: 'Event triggering this workflow, used to determine the tags'
+    required: true
+  repositories:
+    description: 'Repositories where images are pushed'
+    required: true
+  gcp_workload_identity_provider:
+    description: 'Google WIP to auth'
+    required: true
+  gcp_service_account:
+    description: 'Google service account to use'
+    required: true
+  gcp_region:
+    description: 'Google region to push images to'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: 'Install cosign'
+      uses: sigstore/cosign-installer@4959ce089c160fddf62f7b42464195ba1a56d382 # v3.6.0
+
+    - name: 'Setup docker buildx'
+      uses: docker/setup-buildx-action@988b5a0280414f521da01fcc63a27aeeb4b104db # v3.6.1
+
+    - name: 'Login to ghcr'
+      uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
+      with:
+        registry: ghcr.io
+        username: '${{ github.actor }}'
+        password: '${{ github.token }}'
+
+    - name: 'Authenticate to Google Cloud'
+      uses: 'google-github-actions/auth@62cf5bd3e4211a0a0b51f2c6d6a37129d828611d' # v2.1.5
+      id: google-auth
+      with:
+        token_format: access_token
+        workload_identity_provider: ${{ inputs.gcp_workload_identity_provider }}
+        service_account: ${{ inputs.gcp_service_account }}
+
+    - name: 'Set up Cloud SDK'
+      uses: 'google-github-actions/setup-gcloud@f0990588f1e5b5af6827153b93673613abdc6ec7' # v2.1.1
+
+    - name: 'Login to Google Artifact Registry'
+      uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
+      with:
+        registry: ${{ inputs.gcp_region }}-docker.pkg.dev
+        username: oauth2accesstoken
+        password: ${{ steps.google-auth.outputs.access_token }}
+
+    # This step just captures the short commit as the protect_version. Every
+    # image that is built gets a short commit tag.
+    - name: 'Capture version and tag list'
+      id: version
+      shell: bash
+      run: |
+        echo "protect_version=$(git rev-parse --short HEAD)" >> ${GITHUB_OUTPUT}
+
+    - name: Docker meta
+      uses: docker/metadata-action@8e5442c4ef9f78752691e2d8f8d19755c6f78e81 # v5.5.1
+      id: meta
+      with:
+        images: ${{ inputs.repositories }}
+        tags: |
+          # Tag with branch on push
+          type=ref,event=branch
+
+          # Tag with short sha on all events
+          type=sha,prefix=
+
+          # Tag version and stable on tag push
+          type=semver,pattern={{raw}}
+          type=semver,pattern={{version}}
+          type=semver,pattern={{major}}
+          type=semver,pattern={{major}}.{{minor}}
+          type=semver,pattern=stable
+
+          # Tag nightly on schedule event
+          type=schedule,pattern=nightly
+
+    - name: 'Docker build and push protect-${{ inputs.component }}'
+      uses: docker/build-push-action@5cd11c3a4ced054e52742c5fd54dca954e0edd85 # v6.7.0
+      id: push
+      with:
+        file: ./images/Dockerfile.${{ inputs.component }}
+        platforms: linux/amd64
+        tags: '${{ steps.meta.outputs.tags }}'
+        push: true
+        # TODO: Handle in-container script auth better
+        build-args: |
+          PROTECT_VERSION=${{ steps.version.outputs.protect_version }}
+          REGISTRY_USER=${{ github.actor }}
+        secrets: |
+          registry_token=${{ github.token }}
+
+    - name: 'Cosign sign all images'
+      shell: bash
+      run: |
+        for tag in $(echo '${{ steps.meta.outputs.tags }}'); do
+          pullstring="${tag}@${DIGEST}"
+          echo "Signing ${pullstring}"
+          cosign sign --yes "${pullstring}"
+        done
+      env:
+        DIGEST: '${{ steps.push.outputs.digest }}'
+        COSIGN_EXPERIMENTAL: 'true'
