@@ -97,9 +97,9 @@ runs:
         # TODO: Handle in-container script auth better
         build-args: |
           PROTECT_VERSION=${{ steps.version.outputs.protect_version }}
-          REGISTRY_USER=${{ github.actor }}
+          REGISTRY_USER=oauth2accesstoken
         secrets: |
-          registry_token=${{ github.token }}
+          registry_token=${{ steps.google-auth.outputs.access_token }}
 
     - name: 'Cosign sign all images'
       shell: bash
