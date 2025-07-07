@@ -3,6 +3,9 @@ description: |
   Build and sign images
 
 inputs:
+  protect_ref:
+    description: 'Specific ref for protect to build'
+    required: true
   component:
     description: 'Component image to build'
     required: true
@@ -64,6 +67,56 @@ runs:
       run: |
         echo "protect_version=$(git rev-parse --short HEAD)" >> ${GITHUB_OUTPUT}
 
+        # This is gross, but it detects whether we're checked out into a tag
+        # and sets the version tags accordingly. This is for a case of
+        # rebuilding an image from a tag. The docker metadata action only version
+        # tags on the "tag" event, it doesn't version tag when we checkout a tag
+        # on a workflow_dispatch
+        OUTDIR=$(mktemp -d)
+        if git describe --exact-match --tags &>/dev/null; then
+          input="$(git describe --exact-match --tags)"
+          if [[ "$input" =~ ^v([0-9]+)(\.([0-9]+))?(\.([0-9]+))?(-rc[0-9]+)?$ ]]; then
+            major="${BASH_REMATCH[1]}"
+            minor="${BASH_REMATCH[3]}"
+            patch="${BASH_REMATCH[5]}"
+            candidate="${BASH_REMATCH[6]}"
+
+            # Build version strings
+            full_with_v="v${major}"
+            full_no_v="${major}"
+
+            if [[ -n "$minor" ]]; then
+              full_with_v+=".${minor}"
+              full_no_v+=".${minor}"
+            fi
+
+            if [[ -n "$patch" ]]; then
+              full_with_v+=".${patch}"
+              full_no_v+=".${patch}"
+            fi
+
+            if [[ -n "$candidate" ]]; then
+              full_with_v+="${candidate}"
+              full_no_v+="${candidate}"
+            fi
+
+            # Output full_with_v tag and descending specificity
+            echo "$full_with_v" | tee -a $OUTDIR/tag
+            echo "$full_no_v" | tee -a $OUTDIR/tag
+
+            # Do not output broader specificity when there is a release candidate
+            if [[ -z "$candidate" ]]; then
+              echo "${major}.${minor}" | tee -a $OUTDIR/tag
+              echo "${major}" | tee -a $OUTDIR/tag
+            fi
+          fi
+        else
+          # It's a commit SHA or branch name so ignore
+          echo "" | tee -a $OUTDIR/tag
+        fi
+        echo "protect_version_tags=$(cat $OUTDIR/tag)" >> ${GITHUB_OUTPUT}
+
+
     - name: Docker meta
       uses: docker/metadata-action@8e5442c4ef9f78752691e2d8f8d19755c6f78e81 # v5.5.1
       id: meta
@@ -89,6 +142,8 @@ runs:
 
           # Tag nightly on schedule event
           type=schedule,pattern=nightly
+
+          ${{ steps.version.outputs.protect_version_tags }}
 
     - name: 'Docker build and push protect-${{ inputs.component }}'
       uses: docker/build-push-action@5cd11c3a4ced054e52742c5fd54dca954e0edd85 # v6.7.0
