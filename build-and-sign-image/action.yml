@@ -172,6 +172,7 @@ runs:
           registry_token=${{ steps.google-auth.outputs.access_token }}
 
     - name: 'Cosign sign all images'
+      if: '${{ inputs.push == true }}'
       shell: bash
       run: |
         for tag in $(echo '${{ steps.meta.outputs.tags }}'); do
