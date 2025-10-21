@@ -24,6 +24,9 @@ inputs:
   gcp_region:
     description: 'Google region to push images to'
     required: true
+  push:
+    description: 'To push or not'
+    default: 'true'
 
 runs:
   using: composite
@@ -160,7 +163,7 @@ runs:
         file: ./images/Dockerfile.${{ inputs.component }}
         platforms: linux/amd64
         tags: '${{ steps.meta.outputs.tags }}'
-        push: true
+        push: '${{ inputs.push }}'
         # TODO: Handle in-container script auth better
         build-args: |
           PROTECT_VERSION=${{ steps.version.outputs.protect_version }}
