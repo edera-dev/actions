@@ -1,0 +1,40 @@
+name: 'Setup Cargo Make'
+description: 'Install Cargo Make from cache'
+runs:
+    using: composite
+    steps:
+      - name: Fetch latest cargo-make version
+        id: get-version
+        shell: bash
+        run: |
+          VERSION=$(curl -s \
+            -H "User-Agent: github.com/edera-dev (contact: support@edera.dev>)" \
+            https://crates.io/api/v1/crates/cargo-make | jq -r '.crate.max_stable_version')
+          echo "cargo_make_version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Cache cargo-make binary
+        id: cache-cargo-make
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.cargo/bin/cargo-make
+          key: ${{ runner.os }}-cargo-make-${{ steps.get-version.outputs.cargo_make_version }}
+
+      - name: Install cargo-make if missing or outdated
+        if: steps.cache-cargo-make.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          cargo install cargo-make --version "${CARGO_MAKE_VERSION}" --force
+        env:
+          CARGO_MAKE_VERSION: ${{ steps.get-version.outputs.cargo_make_version }}
+
+      - name: Verify cargo-make
+        shell: bash
+        run: cargo make --version
+
+outputs:
+  cargo_make_version:
+    description: 'The version of cargo-make that was installed'
+    value: ${{ steps.get-version.outputs.cargo_make_version }}
+  cache-key:
+    description: 'The cache key used for cargo-make'
+    value: ${{ steps.cache-cargo-make.outputs.cache-primary-key }}
