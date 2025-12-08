@@ -1,0 +1,30 @@
+name: 'Notify Slack'
+description: 'Notify Slack'
+
+inputs:
+  webhook:
+    description: 'Slack Webhook URL'
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+  - name: Notify channel
+    uses: slackapi/slack-github-action@485a9d42d3a73031f12ec201c457e2162c45d02d # v2.0.0
+    with:
+      webhook: ${{ inputs.webhook }}
+      webhook-type: incoming-webhook
+      payload: |
+        blocks:
+          - type: "section"
+            text:
+              type: "mrkdwn"
+              text: ":party-ivy-censored: *Edera Release Action `Failed`*"
+          - type: "section"
+            text:
+              type: "mrkdwn"
+              text: ":runner: Run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id}}"
+          - type: "section"
+            text:
+              type: "mrkdwn"
+              text: ":edera-ivy-disguise: Commit: ${{ github.event.pull_request.html_url || github.event.head_commit.url }}"
