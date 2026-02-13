@@ -160,7 +160,12 @@ runs:
         # (we should always run the checkout action explicitly before this),
         # and we want preceding Cargo.toml version munges to be respected.
         context: .
-        file: ./images/Dockerfile.${{ inputs.component }}
+        file: |
+              ${{
+                hashFiles(format('./images/Dockerfile.{0}', inputs.component)) != ''
+                && format('./images/Dockerfile.{0}', inputs.component)
+                || format('./images/Containerfile.{0}', inputs.component)
+              }}
         platforms: linux/amd64
         tags: '${{ steps.meta.outputs.tags }}'
         push: '${{ inputs.push }}'
