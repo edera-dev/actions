@@ -164,7 +164,7 @@ runs:
           context: .
           file: ${{ hashFiles(format('./images/Dockerfile.{0}', inputs.component)) != '' && format('./images/Dockerfile.{0}', inputs.component) || format('./images/Containerfile.{0}', inputs.component) }}
           platforms: linux/amd64
-          tags: "${{ join(fromJSON(steps.meta.outputs.json).tags, ',') }}"
+          tags: ${{ join(fromJSON(steps.meta.outputs.json).tags, ',') }}
           push: "${{ inputs.push }}"
           build-args: |
             PROTECT_VERSION=${{ steps.version.outputs.protect_version }}
