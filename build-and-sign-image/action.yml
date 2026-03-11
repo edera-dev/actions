@@ -152,6 +152,7 @@ runs:
 
     - name: 'Flatten image tag yaml'
       id: flattened-tags
+      shell: bash
       run: echo "tags=$(echo '${{ steps.meta.outputs.tags }}' | tr '\n' ',')" >> $GITHUB_OUTPUT
 
     - name: 'Docker build and push protect-${{ inputs.component }}'
