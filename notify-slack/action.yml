@@ -9,22 +9,22 @@ inputs:
 runs:
   using: 'composite'
   steps:
-  - name: Notify channel
+  - name: Fetch failure log snippet
+    shell: bash
+    id: get_logs
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    run: python3 ${{ github.action_path }}/action.py
+
+  - name: Post a message in a channel
     uses: slackapi/slack-github-action@485a9d42d3a73031f12ec201c457e2162c45d02d # v2.0.0
     with:
       webhook: ${{ inputs.webhook }}
       webhook-type: incoming-webhook
       payload: |
+        text: "${{ steps.get_logs.outputs.slack_msg }}"
         blocks:
           - type: "section"
             text:
               type: "mrkdwn"
-              text: ":party-ivy-censored: *Edera Release Action `Failed`*"
-          - type: "section"
-            text:
-              type: "mrkdwn"
-              text: ":runner: Run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id}}"
-          - type: "section"
-            text:
-              type: "mrkdwn"
-              text: ":edera-ivy-disguise: Commit: ${{ github.event.pull_request.html_url || github.event.head_commit.url }}"
+              text: "${{ steps.get_logs.outputs.slack_msg }}"
