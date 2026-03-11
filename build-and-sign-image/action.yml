@@ -150,6 +150,10 @@ runs:
           ${{ steps.version.outputs.protect_version_tag_stable }}
           ${{ steps.version.outputs.protect_version_tag_latest }}
 
+    - name: 'Flatten image tag yaml'
+      id: flattened-tags
+      run: echo "tags=$(echo '${{ steps.meta.outputs.tags }}' | tr '\n' ',')" >> $GITHUB_OUTPUT
+
     - name: 'Docker build and push protect-${{ inputs.component }}'
       uses: Wandalen/wretry.action@e68c23e6309f2871ca8ae4763e7629b9c258e1ea # v3.8.0
       id: push
@@ -164,7 +168,7 @@ runs:
           context: .
           file: ${{ hashFiles(format('./images/Dockerfile.{0}', inputs.component)) != '' && format('./images/Dockerfile.{0}', inputs.component) || format('./images/Containerfile.{0}', inputs.component) }}
           platforms: linux/amd64
-          tags: ${{ join(fromJSON(steps.meta.outputs.json).tags, ',') }}
+          tags: ${{ steps.flattened-tags.outputs.tags }}
           push: "${{ inputs.push }}"
           build-args: |
             PROTECT_VERSION=${{ steps.version.outputs.protect_version }}
