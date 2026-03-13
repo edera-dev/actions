@@ -68,7 +68,7 @@ runs:
       id: version
       shell: bash
       run: |
-        echo "protect_version=$(git rev-parse --short HEAD)" >> ${GITHUB_OUTPUT}
+        echo "protect_version=$(git rev-parse --short=7 HEAD)" >> ${GITHUB_OUTPUT}
 
         # This is gross, but it detects whether we're checked out into a tag
         # and sets the version tags accordingly. This is for a case of
