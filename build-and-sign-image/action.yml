@@ -24,6 +24,12 @@ inputs:
   gcp_region:
     description: 'Google region to push images to'
     required: true
+  dockerfile:
+    description: 'Dockerfile name to use (defaults to component name)'
+    required: false
+  target:
+    description: 'Build target stage to use'
+    required: false
   push:
     description: 'To push or not'
     default: 'true'
@@ -167,7 +173,8 @@ runs:
           # (we should always run the checkout action explicitly before this),
           # and we want preceding Cargo.toml version munges to be respected.
           context: .
-          file: ${{ hashFiles(format('./images/Dockerfile.{0}', inputs.component)) != '' && format('./images/Dockerfile.{0}', inputs.component) || format('./images/Containerfile.{0}', inputs.component) }}
+          file: ${{ hashFiles(format('./images/Dockerfile.{0}', inputs.dockerfile || inputs.component)) != '' && format('./images/Dockerfile.{0}', inputs.dockerfile || inputs.component) || format('./images/Containerfile.{0}', inputs.dockerfile || inputs.component) }}
+          target: ${{ inputs.target }}
           platforms: linux/amd64
           tags: ${{ steps.flattened-tags.outputs.tags }}
           push: "${{ inputs.push }}"
