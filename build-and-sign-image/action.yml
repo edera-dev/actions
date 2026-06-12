@@ -189,6 +189,22 @@ runs:
         attempt_limit: 3
         attempt_delay: 30000
 
+    - name: 'Resolve pushed image digest'
+      if: ${{ inputs.push == 'true' }}
+      id: digest
+      shell: bash
+      run: |
+        set -euo pipefail
+        primary_repo="$(echo "${REPOSITORIES}" | head -n1 | xargs)"
+        DIGEST="$(docker buildx imagetools inspect \
+          "${primary_repo}:${PROTECT_VERSION}" \
+          --format '{{json .Manifest}}' | jq -r '.digest')"
+        : "${DIGEST:?could not resolve image digest}"
+        echo "digest=${DIGEST}" >> "${GITHUB_OUTPUT}"
+      env:
+        REPOSITORIES: ${{ inputs.repositories }}
+        PROTECT_VERSION: ${{ steps.version.outputs.protect_version }}
+
     - name: 'Cosign sign all images'
       if: '${{ inputs.push == true }}'
       shell: bash
@@ -204,23 +220,33 @@ runs:
           done
         done
       env:
-        DIGEST: '${{ steps.push.outputs.digest }}'
+        DIGEST: '${{ steps.digest.outputs.digest }}'
         COSIGN_EXPERIMENTAL: 'true'
 
     - name: 'Install syft'
       if: ${{ inputs.sbom == 'true' && inputs.push == 'true' }}
-      uses: anchore/sbom-action/download-syft@e11c554f704a0b820cbf8c51673f6945e0731532 # v0.20.0 — verify/pin latest
+      uses: anchore/sbom-action/download-syft@36a5fde73e0fcb1d1e70be9ad66b4724e783bda7
       id: syft
 
     - name: 'Generate SBOM for pushed image'
       if: ${{ inputs.sbom == 'true' && inputs.push == 'true' }}
+      id: sbom
       shell: bash
       run: |
         set -euo pipefail
-        # First repository line is the canonical scan source
         primary_repo="$(echo "${REPOSITORIES}" | head -n1 | xargs)"
+
+        # wretry.action does not pass through inner action outputs, so
+        # resolve the digest from the registry via the short-sha tag
+        if [ -z "${DIGEST}" ]; then
+          DIGEST="$(docker buildx imagetools inspect \
+            "${primary_repo}:${PROTECT_VERSION}" \
+            --format '{{json .Manifest}}' | jq -r '.digest')"
+        fi
+        : "${DIGEST:?could not resolve image digest}"
+        echo "digest=${DIGEST}" >> "${GITHUB_OUTPUT}"
+
         echo "Scanning ${primary_repo}@${DIGEST}"
-        # syft reuses the docker credentials established by the login action above
         "${SYFT_CMD}" "registry:${primary_repo}@${DIGEST}" \
           -o "cyclonedx-json=protect-${COMPONENT}.cdx.json"
 
@@ -233,6 +259,7 @@ runs:
         SYFT_CMD: ${{ steps.syft.outputs.cmd }}
         REPOSITORIES: ${{ inputs.repositories }}
         DIGEST: ${{ steps.push.outputs.digest }}
+        PROTECT_VERSION: ${{ steps.version.outputs.protect_version }}
         COMPONENT: ${{ inputs.component }}
 
     - name: 'Cosign attest SBOM to all registries'
@@ -240,8 +267,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        # One attestation per repository@digest (digest-addressed, so per-tag
-        # iteration is unnecessary — unlike the signing loop above)
+        # One attestation per repository@digest
         echo "${REPOSITORIES}" | while read -r repo; do
           repo="$(echo "${repo}" | xargs)"
           [ -z "${repo}" ] && continue
@@ -259,13 +285,13 @@ runs:
         done
       env:
         REPOSITORIES: ${{ inputs.repositories }}
-        DIGEST: ${{ steps.push.outputs.digest }}
+        DIGEST: ${{ steps.sbom.outputs.digest }}
         COMPONENT: ${{ inputs.component }}
         COSIGN_EXPERIMENTAL: 'true'
 
     - name: 'Upload SBOM as workflow artifact'
       if: ${{ inputs.sbom == 'true' && inputs.push == 'true' }}
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 (matching your workflow's pin)
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: sbom-protect-${{ inputs.component }}
         path: protect-${{ inputs.component }}.cdx.json
