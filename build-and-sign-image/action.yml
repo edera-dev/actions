@@ -36,6 +36,13 @@ inputs:
   sbom:
     description: 'Generate an SBOM for the pushed image, attest, and upload as a workflow artifact'
     default: 'false'
+  sbom_strict:
+    description: |
+      Fail the build when the merged SBOM has zero components (no coverage).
+      Defaults to false during rollout so copy-only composites whose bases do
+      not yet carry SBOM attestations warn-and-skip instead of breaking the
+      release. Flip to true once every base image is publishing SBOMs.
+    default: 'false'
 
 runs:
   using: composite
@@ -228,7 +235,17 @@ runs:
       uses: anchore/sbom-action/download-syft@36a5fde73e0fcb1d1e70be9ad66b4724e783bda7
       id: syft
 
-    - name: 'Generate SBOM for pushed image'
+    # Build the composite's SBOM in three parts and merge them:
+    #   1. scan the pushed image itself (cargo-auditable dep trees, shipped apk
+    #      rootfs, etc. -- empty for pure FROM-scratch copy-only composites);
+    #   2. enumerate the bases the target stage COPYs shipped artifacts from and
+    #      download each base's own CycloneDX attestation (by digest, no verify);
+    #   3. merge the local scan + base SBOMs into one document.
+    # Bases without an attestation (toolchain builders, or pins predating the
+    # SBOM rollout) are skipped with a warning. By default an empty result warns
+    # and skips attestation rather than failing the release; set sbom_strict to
+    # flip empty -> hard failure once every base is publishing SBOMs.
+    - name: 'Generate and merge SBOM for pushed image'
       if: ${{ inputs.sbom == 'true' && inputs.push == 'true' }}
       id: sbom
       shell: bash
@@ -246,24 +263,90 @@ runs:
         : "${DIGEST:?could not resolve image digest}"
         echo "digest=${DIGEST}" >> "${GITHUB_OUTPUT}"
 
+        # 1) Scan the pushed composite image itself. Drop per-file noise; keep
+        #    package + binary (cargo-auditable) catalogers. Zero components is
+        #    expected for pure copy-only composites and is not an error here.
         echo "Scanning ${primary_repo}@${DIGEST}"
         "${SYFT_CMD}" "registry:${primary_repo}@${DIGEST}" \
-          -o "cyclonedx-json=protect-${COMPONENT}.cdx.json"
+          --select-catalogers "-file" \
+          -o "cyclonedx-json=local.cdx.json"
 
-        jq -e '.bomFormat == "CycloneDX" and ((.components // []) | length > 0)' \
-          "protect-${COMPONENT}.cdx.json" > /dev/null \
-          || { echo "::error::SBOM for ${COMPONENT} is empty or invalid"; exit 1; }
-        jq '{component: env.COMPONENT, components: (.components|length)}' \
-          "protect-${COMPONENT}.cdx.json"
+        # 2) Enumerate the bases this composite copies from and pull each base's
+        #    CycloneDX attestation, keyed by an immutable digest.
+        dockerfile="./images/Dockerfile.${DOCKERFILE_NAME}"
+        [ -f "${dockerfile}" ] || dockerfile="./images/Containerfile.${DOCKERFILE_NAME}"
+        mkdir -p bases
+        python3 "${GITHUB_ACTION_PATH}/sbom/list_bases.py" "${dockerfile}" "${TARGET}" \
+          > bases.txt \
+          || { echo "::warning::could not enumerate bases from ${dockerfile}"; : > bases.txt; }
+
+        bases_found=0
+        bases_with_sbom=0
+        while IFS= read -r base; do
+          [ -n "${base}" ] || continue
+          bases_found=$((bases_found + 1))
+          case "${base}" in
+            *@sha256:*) pull="${base}" ;;
+            *)
+              d="$(docker buildx imagetools inspect "${base}" \
+                    --format '{{json .Manifest}}' 2>/dev/null \
+                    | jq -r '.digest // empty')"
+              if [ -z "${d}" ]; then
+                echo "::warning::could not resolve ${base} to a digest; skipping"
+                continue
+              fi
+              pull="${base%:*}@${d}"
+              ;;
+          esac
+          safe="$(printf '%s' "${base}" | tr -c 'A-Za-z0-9._-' '_')"
+          # Download attestations and extract the first CycloneDX predicate.
+          # Handles both the bundle (.dsseEnvelope.payload) and bare DSSE shapes.
+          if cosign download attestation "${pull}" 2>/dev/null \
+              | jq -s '[.[] | (.dsseEnvelope.payload // .payload) | @base64d
+                        | fromjson
+                        | select(.predicateType == "https://cyclonedx.org/bom")
+                        | .predicate] | .[0] // empty' \
+              > "bases/${safe}.cdx.json" 2>/dev/null \
+              && [ -s "bases/${safe}.cdx.json" ]; then
+            bases_with_sbom=$((bases_with_sbom + 1))
+            echo "  + ${base}: CycloneDX attestation merged"
+          else
+            rm -f "bases/${safe}.cdx.json"
+            echo "::warning::no CycloneDX attestation for base ${base} (toolchain builder, or pinned digest predates SBOM rollout -- bump the FROM pin to an SBOM-bearing digest)"
+          fi
+        done < bases.txt
+
+        # 3) Merge local scan + base SBOMs into protect-${COMPONENT}.cdx.json.
+        LOCAL_SBOM=local.cdx.json BASES_DIR=bases \
+          python3 "${GITHUB_ACTION_PATH}/sbom/merge.py"
+
+        count="$(jq '(.components // []) | length' "protect-${COMPONENT}.cdx.json")"
+        echo "SBOM for ${COMPONENT}: ${count} components (${bases_with_sbom}/${bases_found} bases + local scan)"
+
+        if [ "${count}" -eq 0 ]; then
+          if [ "${SBOM_STRICT}" = "true" ]; then
+            echo "::error::SBOM for ${COMPONENT} has no components and sbom_strict=true"
+            exit 1
+          fi
+          echo "::warning::SBOM for ${COMPONENT} has no components; its bases carry no SBOM yet. Skipping attestation. Set sbom_strict=true to fail instead once the SBOM rollout is complete."
+          echo "has_sbom=false" >> "${GITHUB_OUTPUT}"
+        else
+          echo "has_sbom=true" >> "${GITHUB_OUTPUT}"
+        fi
       env:
         SYFT_CMD: ${{ steps.syft.outputs.cmd }}
         REPOSITORIES: ${{ inputs.repositories }}
         DIGEST: ${{ steps.push.outputs.digest }}
         PROTECT_VERSION: ${{ steps.version.outputs.protect_version }}
         COMPONENT: ${{ inputs.component }}
+        DOCKERFILE_NAME: ${{ inputs.dockerfile || inputs.component }}
+        TARGET: ${{ inputs.target }}
+        SBOM_STRICT: ${{ inputs.sbom_strict }}
+        GITHUB_ACTION_PATH: ${{ github.action_path }}
+        COSIGN_EXPERIMENTAL: 'true'
 
     - name: 'Cosign attest SBOM to all registries'
-      if: ${{ inputs.sbom == 'true' && inputs.push == 'true' }}
+      if: ${{ inputs.sbom == 'true' && inputs.push == 'true' && steps.sbom.outputs.has_sbom == 'true' }}
       shell: bash
       run: |
         set -euo pipefail
