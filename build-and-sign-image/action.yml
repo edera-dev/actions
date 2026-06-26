@@ -231,7 +231,7 @@ runs:
 
     - name: 'Install syft'
       if: ${{ inputs.sbom == 'true' && inputs.push == 'true' }}
-      uses: anchore/sbom-action/download-syft@36a5fde73e0fcb1d1e70be9ad66b4724e783bda7
+      uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610
       id: syft
 
     # Build the composite's SBOM in three parts and merge them:
