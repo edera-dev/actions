@@ -20,7 +20,7 @@ runs:
     run: python3 ${{ github.action_path }}/action.py
 
   - name: Post a message in a channel
-    uses: slackapi/slack-github-action@485a9d42d3a73031f12ec201c457e2162c45d02d # v2.0.0
+    uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3.0.3
     with:
       webhook: ${{ inputs.webhook }}
       webhook-type: incoming-webhook
