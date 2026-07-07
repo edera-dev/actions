@@ -43,6 +43,13 @@ inputs:
       not yet carry SBOM attestations warn-and-skip instead of breaking the
       release. Flip to true once every base image is publishing SBOMs.
     default: 'false'
+  sbom_extra_scan_target:
+    description: |
+      Optional Dockerfile stage to additionally build (--load) and syft-scan,
+      merging found components into the SBOM. Use it when the composite
+      ships an artifact in a form syft cannot introspect, like zone-init packed
+      inside an initrd.
+    default: ''
 
 runs:
   using: composite
@@ -315,8 +322,27 @@ runs:
           fi
         done < bases.txt
 
-        # 3) Merge local scan + base SBOMs into protect-${COMPONENT}.cdx.json.
-        LOCAL_SBOM=local.cdx.json BASES_DIR=bases \
+        # 2b) Extra scan when `sbom_extra_scan_target` is set.
+        EXTRA_SBOM=""
+        if [ -n "${SBOM_EXTRA_SCAN_TARGET}" ]; then
+          echo "Building + scanning extra SBOM stage: ${SBOM_EXTRA_SCAN_TARGET}"
+          extra_tag="sbom-extra-${COMPONENT}:scan"
+          docker buildx build \
+            --target "${SBOM_EXTRA_SCAN_TARGET}" \
+            --load \
+            --build-arg "PROTECT_VERSION=${PROTECT_VERSION}" \
+            -f "${dockerfile}" \
+            -t "${extra_tag}" .
+          "${SYFT_CMD}" "${extra_tag}" \
+            --select-catalogers "-file" \
+            -o "cyclonedx-json=extra.cdx.json"
+          extra_count="$(jq '(.components // []) | length' extra.cdx.json)"
+          echo "  extra scan (${SBOM_EXTRA_SCAN_TARGET}): ${extra_count} components"
+          EXTRA_SBOM=extra.cdx.json
+        fi
+
+        # 3) Merge local scan + extra scan + base SBOMs into protect-${COMPONENT}.cdx.json.
+        LOCAL_SBOM=local.cdx.json EXTRA_SBOM="${EXTRA_SBOM}" BASES_DIR=bases \
           python3 "${GITHUB_ACTION_PATH}/sbom/merge.py"
 
         count="$(jq '(.components // []) | length' "protect-${COMPONENT}.cdx.json")"
@@ -341,6 +367,7 @@ runs:
         DOCKERFILE_NAME: ${{ inputs.dockerfile || inputs.component }}
         TARGET: ${{ inputs.target }}
         SBOM_STRICT: ${{ inputs.sbom_strict }}
+        SBOM_EXTRA_SCAN_TARGET: ${{ inputs.sbom_extra_scan_target }}
         GITHUB_ACTION_PATH: ${{ github.action_path }}
 
     - name: 'Cosign attest SBOM to all registries'

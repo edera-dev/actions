@@ -13,6 +13,8 @@ Reads from the environment:
   PROTECT_VERSION  composite version (the short-sha tag)
   LOCAL_SBOM       path to the syft scan of the pushed composite (may be absent
                    or contain zero components for FROM-scratch composites)
+  EXTRA_SBOM       optional path to an extra local syft scan. Its components and 
+                   inner dependencies are unioned, its metadata.component is ignored.
   BASES_DIR        directory of <base>.cdx.json predicates already extracted from
                    base attestations (may be empty/missing)
 
@@ -42,6 +44,7 @@ def main():
     component = os.environ["COMPONENT"]
     version = os.environ.get("PROTECT_VERSION", "")
     local_path = os.environ.get("LOCAL_SBOM", "")
+    extra_path = os.environ.get("EXTRA_SBOM", "")
     bases_dir = os.environ.get("BASES_DIR", "")
 
     components = []
@@ -64,6 +67,12 @@ def main():
         for c in local.get("components") or []:
             add(c)
         raw_deps.extend(local.get("dependencies") or [])
+
+    extra = load(extra_path) if extra_path else None
+    if extra:
+        for c in extra.get("components") or []:
+            add(c)
+        raw_deps.extend(extra.get("dependencies") or [])
 
     # Then each base image's downloaded CycloneDX predicate.
     base_files = []
