@@ -6,13 +6,13 @@ description: |
   emitted as a step output, NOT via GITHUB_ENV - environment exported
   there lands in the process env of every later step, including
   third-party actions, while an output reaches only the steps that
-  explicitly bind it. Bind it at the point of use:
+  explicitly bind it. Bind it at the point of use as step-level env: set
+  SCCACHE_AZURE_CONNECTION_STRING on the build step from the expression
+  "steps.<id>.outputs.connection-string". (Written without the
+  curly-brace expression syntax here on purpose - the runner's manifest
+  parser evaluates such expressions even inside this description.)
 
-    - name: build
-      env:
-        SCCACHE_AZURE_CONNECTION_STRING: ${{ steps.<id>.outputs.connection-string }}
-
-  and consume it however the build needs: pass the variable name through
+  Consume it however the build needs: pass the variable name through
   `docker run -e NAME` (values never land in generated scripts), or feed
   docker/build-push-action via
   `secret-envs: sccache_conn=SCCACHE_AZURE_CONNECTION_STRING` into a

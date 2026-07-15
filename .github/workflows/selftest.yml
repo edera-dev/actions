@@ -1,0 +1,70 @@
+name: selftest
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+permissions:
+  contents: read
+jobs:
+  exercise:
+    # Loading each action via a local `uses:` runs the runner's manifest
+    # parser - the thing that catches action.yml template errors (e.g.
+    # expressions evaluated inside description strings), which no offline
+    # linter checks - and then asserts each action's output/env contract.
+    name: exercise actions
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - name: checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
+      - name: report disk space
+        uses: ./report-disk-space
+      - name: reclaim disk space (safe defaults)
+        id: reclaim
+        uses: ./reclaim-disk-space
+      - name: reclaim disk space (all removals)
+        uses: ./reclaim-disk-space
+        with:
+          remove-toolcache: 'true'
+          remove-rust: 'true'
+      - name: configure azure sccache (fake credentials)
+        id: sccache
+        uses: ./configure-azure-sccache
+        with:
+          connection-string-rw: 'BlobEndpoint=https://example.invalid;SharedAccessSignature=fake-rw'
+          connection-string-ro: 'BlobEndpoint=https://example.invalid;SharedAccessSignature=fake-ro'
+          key-prefix: selftest
+      - name: assert action contracts
+        env:
+          CONFIGURED: ${{ steps.sccache.outputs.configured }}
+          RW_MODE: ${{ steps.sccache.outputs.rw-mode }}
+          CONN: ${{ steps.sccache.outputs.connection-string }}
+          FREED_KB: ${{ steps.reclaim.outputs.freed-kb }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -eu
+          [ "${CONFIGURED}" = "true" ]
+          # push (to main) is a trusted event; pull_request is not.
+          case "${EVENT}" in
+            push)
+              [ "${RW_MODE}" = "READ_WRITE" ]
+              echo "${CONN}" | grep -q 'fake-rw'
+              ;;
+            *)
+              [ "${RW_MODE}" = "READ_ONLY" ]
+              echo "${CONN}" | grep -q 'fake-ro'
+              ;;
+          esac
+          echo "${FREED_KB}" | grep -qE '^-?[0-9]+$'
+          [ "${SCCACHE_AZURE_KEY_PREFIX}" = "selftest" ]
+          [ "${SCCACHE_AZURE_BLOB_CONTAINER}" = "sccache" ]
+          [ "${SCCACHE_AZURE_RW_MODE}" = "${RW_MODE}" ]
+          # The connection string must NOT arrive via GITHUB_ENV - only via
+          # the explicit step-output binding above. This is the action's
+          # core secret-hygiene property; fail loudly if it regresses.
+          [ -z "${SCCACHE_AZURE_CONNECTION_STRING:-}" ]
+          echo "all assertions passed"
