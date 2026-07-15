@@ -1,0 +1,14 @@
+name: Report Disk Space
+description: |
+  Print all real filesystems (type, size, usage, mount point), filtering
+  out tmpfs/snap/overlay pseudo-mounts. Use at job start and after the
+  main build (with `if: always()`) so disk-exhaustion failures come with a
+  post-mortem and runner disk topology is visible in every log - runner
+  classes vary and their specs are not reliably documented.
+
+runs:
+  using: composite
+  steps:
+    - name: report disk space
+      shell: bash
+      run: df -hT -x tmpfs -x devtmpfs -x squashfs -x efivarfs -x overlay

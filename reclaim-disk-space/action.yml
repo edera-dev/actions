@@ -1,0 +1,93 @@
+name: Reclaim Disk Space
+description: |
+  Delete preinstalled runner-image tooling the calling workflow does not
+  need, freeing tens of GB on the root disk.
+
+  Ordering matters when remove-toolcache is enabled: this must run BEFORE
+  any tool-installing action (cosign-installer, setup-python,
+  setup-cargo-make, ...), because those actions place binaries under
+  /opt/hostedtoolcache and re-create what they need only if they run
+  afterwards.
+
+  All rm paths are no-ops where a runner image does not ship them, so the
+  action is safe across runner classes and image generations.
+
+inputs:
+  remove-android:
+    description: 'Remove the Android SDK (/usr/local/lib/android, ~6GB)'
+    default: 'true'
+  remove-language-toolchains:
+    description: >-
+      Remove Java, .NET, Swift, Haskell, and Julia toolchains (~9GB
+      combined). Rust is separate; see remove-rust.
+    default: 'true'
+  remove-browsers:
+    description: >-
+      Remove Chromium and the Edge/Chrome installs under /opt/microsoft and
+      /opt/google (~2GB)
+    default: 'true'
+  remove-cloud-clis:
+    description: 'Remove the Azure CLI, Google Cloud SDK, and PowerShell (~1GB)'
+    default: 'true'
+  remove-toolcache:
+    description: >-
+      Remove /opt/hostedtoolcache wholesale (~10GB: CodeQL plus every cached
+      Python/Node/Go version). Breaks setup-* actions and tool installers
+      that already ran; see the ordering note in the action description.
+    default: 'false'
+  remove-rust:
+    description: >-
+      Remove the preinstalled Rust toolchain (~/.rustup and ~/.cargo,
+      ~2GB). Leave disabled for jobs that build Rust on the runner or use
+      setup-cargo-make (which caches into ~/.cargo/bin).
+    default: 'false'
+  prune-docker:
+    description: 'Prune preseeded docker images and build cache'
+    default: 'true'
+
+outputs:
+  freed-kb:
+    description: 'Kilobytes freed on the root filesystem'
+    value: ${{ steps.reclaim.outputs.freed-kb }}
+
+runs:
+  using: composite
+  steps:
+    - name: reclaim disk space
+      id: reclaim
+      shell: bash
+      run: |
+        avail_before="$(df --output=avail -k / | tail -1 | tr -d ' ')"
+
+        remove() {
+          sudo rm -rf "$@"
+        }
+        if [ "${{ inputs.remove-android }}" = "true" ]; then
+          remove /usr/local/lib/android
+        fi
+        if [ "${{ inputs.remove-language-toolchains }}" = "true" ]; then
+          remove /usr/lib/jvm /usr/share/dotnet /usr/share/swift \
+            /usr/local/.ghcup /usr/local/julia*
+        fi
+        if [ "${{ inputs.remove-browsers }}" = "true" ]; then
+          remove /usr/local/share/chromium /opt/microsoft /opt/google
+        fi
+        if [ "${{ inputs.remove-cloud-clis }}" = "true" ]; then
+          remove /opt/az /usr/lib/google-cloud-sdk /usr/local/share/powershell
+        fi
+        if [ "${{ inputs.remove-toolcache }}" = "true" ]; then
+          remove /opt/hostedtoolcache
+        fi
+        if [ "${{ inputs.remove-rust }}" = "true" ]; then
+          remove "${HOME}/.rustup" "${HOME}/.cargo"
+        fi
+        if [ "${{ inputs.prune-docker }}" = "true" ]; then
+          docker system prune -af >/dev/null 2>&1 || true
+          docker builder prune -af >/dev/null 2>&1 || true
+        fi
+
+        avail_after="$(df --output=avail -k / | tail -1 | tr -d ' ')"
+        freed=$((avail_after - avail_before))
+        echo "freed-kb=${freed}" >> "${GITHUB_OUTPUT}"
+        echo "freed ${freed}KB on /"
+        df -hT -x tmpfs -x devtmpfs -x squashfs -x efivarfs -x overlay

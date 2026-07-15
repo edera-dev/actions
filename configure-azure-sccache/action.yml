@@ -1,0 +1,102 @@
+name: Configure Azure sccache
+description: |
+  Select sccache Azure Blob credentials for this run. Non-secret settings
+  (SCCACHE_AZURE_RW_MODE, _BLOB_CONTAINER, _KEY_PREFIX) are exported for
+  subsequent steps via GITHUB_ENV; the connection string itself is only
+  emitted as a step output, NOT via GITHUB_ENV - environment exported
+  there lands in the process env of every later step, including
+  third-party actions, while an output reaches only the steps that
+  explicitly bind it. Bind it at the point of use:
+
+    - name: build
+      env:
+        SCCACHE_AZURE_CONNECTION_STRING: ${{ steps.<id>.outputs.connection-string }}
+
+  and consume it however the build needs: pass the variable name through
+  `docker run -e NAME` (values never land in generated scripts), or feed
+  docker/build-push-action via
+  `secret-envs: sccache_conn=SCCACHE_AZURE_CONNECTION_STRING` into a
+  `RUN --mount=type=secret` in the Dockerfile. The value stays masked in
+  logs regardless of transport (masking is value-based).
+
+  Only triggers named in trusted-events (maintainer-gated contexts) get
+  the read-write connection string; everything else - pull requests
+  today, any trigger added later (e.g. merge_group) - fails closed to the
+  read-only token, so code that has not been reviewed and merged can
+  never poison cache objects later consumed by release builds. When the
+  selected connection string is empty (e.g. fork PRs, which receive no
+  secrets), `configured` is "false" and sccache falls back to a local
+  disk cache.
+
+inputs:
+  connection-string-rw:
+    description: 'Read-write Azure connection string (org secret)'
+    required: true
+  connection-string-ro:
+    description: 'Read-only Azure connection string (org secret)'
+    required: true
+  key-prefix:
+    description: >-
+      Cache namespace within the container, one per project (e.g.
+      "kernel", "xen"). Used for per-project lifecycle rules and metrics.
+    required: true
+  container:
+    description: 'Azure blob container name'
+    default: 'sccache'
+  trusted-events:
+    description: >-
+      Space-separated event names allowed to write to the shared cache.
+      Every event not listed gets read-only access.
+    default: 'push schedule workflow_dispatch'
+
+outputs:
+  configured:
+    description: 'Whether Azure cache credentials were selected ("true"/"false")'
+    value: ${{ steps.select.outputs.configured }}
+  rw-mode:
+    description: 'Selected access mode (READ_WRITE/READ_ONLY)'
+    value: ${{ steps.select.outputs.rw-mode }}
+  connection-string:
+    description: >-
+      The selected connection string (empty when no credentials are
+      available). Step outputs within a job are not subject to the
+      secret-dropping applied to job outputs; bind this as step-level env
+      at the point of use only.
+    value: ${{ steps.select.outputs.connection-string }}
+
+runs:
+  using: composite
+  steps:
+    - name: select sccache credentials
+      id: select
+      shell: bash
+      env:
+        SCCACHE_CONN_RW: ${{ inputs.connection-string-rw }}
+        SCCACHE_CONN_RO: ${{ inputs.connection-string-ro }}
+        EVENT_NAME: ${{ github.event_name }}
+        TRUSTED_EVENTS: ${{ inputs.trusted-events }}
+      run: |
+        case " ${TRUSTED_EVENTS} " in
+          *" ${EVENT_NAME} "*)
+            SCCACHE_CONN="${SCCACHE_CONN_RW}"
+            SCCACHE_MODE="READ_WRITE"
+            ;;
+          *)
+            SCCACHE_CONN="${SCCACHE_CONN_RO}"
+            SCCACHE_MODE="READ_ONLY"
+            ;;
+        esac
+        echo "rw-mode=${SCCACHE_MODE}" >> "${GITHUB_OUTPUT}"
+        echo "connection-string=${SCCACHE_CONN}" >> "${GITHUB_OUTPUT}"
+        if [ -n "${SCCACHE_CONN}" ]; then
+          {
+            echo "SCCACHE_AZURE_RW_MODE=${SCCACHE_MODE}"
+            echo "SCCACHE_AZURE_BLOB_CONTAINER=${{ inputs.container }}"
+            echo "SCCACHE_AZURE_KEY_PREFIX=${{ inputs.key-prefix }}"
+          } >> "${GITHUB_ENV}"
+          echo "configured=true" >> "${GITHUB_OUTPUT}"
+          echo "sccache: ${SCCACHE_MODE} for event ${EVENT_NAME}"
+        else
+          echo "configured=false" >> "${GITHUB_OUTPUT}"
+          echo "sccache: no credentials for event ${EVENT_NAME}; local cache only"
+        fi
