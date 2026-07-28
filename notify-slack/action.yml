@@ -8,6 +8,21 @@ inputs:
   github-token:
     description: 'GitHub token for fetching logs'
     required: true
+  create-issue:
+    description: >
+      File a tracking issue for the failure and link it in the Slack message. On a
+      `push` run the issue is assigned to the author of the PR the head commit came
+      from, unless that author is a bot or the branch was already failing before this
+      run. One issue is kept open per workflow and branch; later failing runs comment
+      on it. Needs `issues: write` and `pull-requests: read`.
+    required: false
+    default: 'false'
+  issue-label:
+    description: >
+      Label applied to tracking issues, also how they are found again. Created in the
+      repository if it does not exist.
+    required: false
+    default: 'ci'
 
 runs:
   using: 'composite'
@@ -17,6 +32,8 @@ runs:
     id: get_logs
     env:
       GH_TOKEN: ${{ inputs.github-token }}
+      CREATE_ISSUE: ${{ inputs.create-issue }}
+      ISSUE_LABEL: ${{ inputs.issue-label }}
     run: python3 ${{ github.action_path }}/action.py
 
   - name: Post a message in a channel
