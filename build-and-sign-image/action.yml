@@ -236,10 +236,54 @@ runs:
       env:
         DIGEST: '${{ steps.digest.outputs.digest }}'
 
+    # anchore/sbom-action/download-syft shells out to anchore's install.sh,
+    # which makes a single unauthenticated github.com release-asset request and
+    # hard-fails on any non-200. the release CDN hands back 5xx's
+    # often enough to break release workflows (anchore/sbom-action#667, currently
+    # open). Install syft ourselves through the authenticated release API
+    # with retries, then verify the tarball against the release's own
+    # checksums file. Bump SYFT_VERSION here to upgrade syft.
     - name: 'Install syft'
       if: ${{ inputs.sbom == 'true' && inputs.push == 'true' }}
-      uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610
       id: syft
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        case "$(uname -m)" in
+          x86_64) arch=amd64 ;;
+          aarch64|arm64) arch=arm64 ;;
+          *) echo "::error::unsupported runner arch $(uname -m)" && exit 1 ;;
+        esac
+        tarball="syft_${SYFT_VERSION}_linux_${arch}.tar.gz"
+        checksums="syft_${SYFT_VERSION}_checksums.txt"
+
+        tmp="$(mktemp -d)"
+        for i in $(seq 1 5); do
+          gh release download "v${SYFT_VERSION}" \
+            --repo anchore/syft \
+            --pattern "${tarball}" \
+            --pattern "${checksums}" \
+            --dir "${tmp}" \
+            --clobber && break
+          echo "syft download attempt ${i} failed, retrying in 15s..."
+          sleep 15
+          [ "${i}" -eq 5 ] && exit 1
+        done
+
+        (cd "${tmp}" && grep " ${tarball}\$" "${checksums}" | sha256sum -c -)
+
+        bindir="${RUNNER_TEMP}/syft-bin"
+        mkdir -p "${bindir}"
+        tar -xzf "${tmp}/${tarball}" -C "${bindir}" syft
+        rm -rf "${tmp}"
+
+        echo "${bindir}" >> "${GITHUB_PATH}"
+        echo "cmd=${bindir}/syft" >> "${GITHUB_OUTPUT}"
+        "${bindir}/syft" --version
+      env:
+        SYFT_VERSION: '1.49.0'
+        GH_TOKEN: '${{ github.token }}'
 
     # Build the composite's SBOM in three parts and merge them:
     #   1. scan the pushed image itself (cargo-auditable dep trees, shipped apk
