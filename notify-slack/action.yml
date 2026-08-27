@@ -8,13 +8,25 @@ inputs:
   github-token:
     description: 'GitHub token for fetching logs'
     required: true
+  mode:
+    description: >
+      'failure' (the default) reports a failing run to Slack and, with create-issue,
+      files or updates the tracking issue. 'resolve' is for green runs: it closes the
+      open tracking issue for this workflow and branch (found via issue-label) and
+      posts a recovery message, or does nothing at all when no issue is open. Call it
+      from a job gated on the workflow having succeeded. Needs `actions: read` and
+      `issues: write`.
+    required: false
+    default: 'failure'
   create-issue:
     description: >
       File a tracking issue for the failure and link it in the Slack message. On a
       `push` run the issue is assigned to the author of the PR the head commit came
       from, unless that author is a bot or the branch was already failing before this
       run. One issue is kept open per workflow and branch; later failing runs comment
-      on it. Needs `issues: write` and `pull-requests: read`.
+      on it. Pair with a success-gated invocation using mode 'resolve' so the issue
+      closes itself when the branch recovers. Needs `issues: write` and
+      `pull-requests: read`.
     required: false
     default: 'false'
   issue-label:
@@ -32,11 +44,14 @@ runs:
     id: get_logs
     env:
       GH_TOKEN: ${{ inputs.github-token }}
+      MODE: ${{ inputs.mode }}
       CREATE_ISSUE: ${{ inputs.create-issue }}
       ISSUE_LABEL: ${{ inputs.issue-label }}
     run: python3 ${{ github.action_path }}/action.py
 
   - name: Post a message in a channel
+    # Empty means nothing to say (resolve mode with no open tracking issue).
+    if: ${{ steps.get_logs.outputs.slack_msg != '' }}
     uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3.0.3
     with:
       webhook: ${{ inputs.webhook }}
