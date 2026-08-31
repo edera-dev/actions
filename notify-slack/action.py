@@ -1,6 +1,7 @@
 import os
 import json
 import subprocess
+import sys
 import urllib.parse
 
 repo = os.environ["GITHUB_REPOSITORY"]
@@ -9,8 +10,11 @@ workflow = os.environ["GITHUB_WORKFLOW"]
 event_name = os.environ.get("GITHUB_EVENT_NAME", "")
 head_sha = os.environ.get("GITHUB_SHA", "")
 branch = os.environ.get("GITHUB_REF_NAME", "")
+mode = os.environ.get("MODE", "failure")
 create_issue = os.environ.get("CREATE_ISSUE", "").lower() == "true"
 issue_label = os.environ.get("ISSUE_LABEL", "ci")
+
+run_url = f"https://github.com/{repo}/actions/runs/{run_id}"
 
 
 def run_gh(*args, payload=None):
@@ -22,6 +26,75 @@ def run_gh(*args, payload=None):
         check=True,
     )
     return result.stdout
+
+
+def tracking_marker(workflow_id):
+    # Ties a tracking issue to its (workflow, branch) breakage; how later runs
+    # find the issue again regardless of title edits.
+    return f"<!-- ci-failure:{workflow_id}:{branch} -->"
+
+
+def find_tracking_issue(workflow_id):
+    # Only open issues count: a closed one means the previous breakage was dealt
+    # with, and a new failure deserves a fresh issue.
+    marker = tracking_marker(workflow_id)
+    label_q = urllib.parse.quote(issue_label)
+    for issue in json.loads(
+        run_gh(f"repos/{repo}/issues?state=open&labels={label_q}&per_page=100")
+    ):
+        if marker in (issue.get("body") or ""):
+            return issue
+    return None
+
+
+def write_slack_output(lines):
+    # The message is interpolated into a YAML double-quoted scalar in action.yml, so
+    # quotes and backslashes have to survive that parse. The joining "\n" is added
+    # after escaping: YAML turns it into the newline Slack renders. An empty message
+    # tells action.yml to skip the Slack step entirely.
+    msg = "\\n".join(
+        line.replace("\\", "\\\\").replace('"', '\\"') for line in lines
+    )
+    print(msg)
+    with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+        f.write(f"slack_msg<<EOF\n{msg}\nEOF\n")
+
+
+if mode == "resolve":
+    # Called from a success-gated job: the branch is green again, so the breakage
+    # the open tracking issue describes is over. Close it and give the channel
+    # the all-clear. Without this every issue waits on a human to close it, and
+    # the next flake after that close files a duplicate.
+    lines = []
+    try:
+        run = json.loads(run_gh(f"repos/{repo}/actions/runs/{run_id}"))
+        issue = find_tracking_issue(run["workflow_id"])
+        if issue:
+            run_gh(
+                f"repos/{repo}/issues/{issue['number']}/comments",
+                payload={
+                    "body": f"Recovered: {run_url} (`{event_name}` of "
+                    f"`{head_sha[:12]}`) succeeded on `{branch}`, closing."
+                },
+            )
+            run_gh(
+                "--method",
+                "PATCH",
+                f"repos/{repo}/issues/{issue['number']}",
+                payload={"state": "closed", "state_reason": "completed"},
+            )
+            lines = [
+                f"*{workflow} Workflow `Recovered`*",
+                f"> *Repo:* {repo} - run <{run_url}|{run_id}> on `{branch}`",
+                f"> Closed tracking issue "
+                f"<{issue['html_url']}|#{issue['number']}>",
+            ]
+    except (subprocess.CalledProcessError, KeyError, ValueError):
+        # Leaving the issue open just restores the status quo (a human closes
+        # it), which is not worth failing the job or posting to Slack about.
+        lines = []
+    write_slack_output(lines)
+    sys.exit(0)
 
 
 # Link the failing job rather than quoting the logs in the issue, simpler and less clutter.
@@ -102,7 +175,6 @@ if event_name == "push":
     except (subprocess.CalledProcessError, KeyError, ValueError):
         pass
 
-run_url = f"https://github.com/{repo}/actions/runs/{run_id}"
 pr_ref = f" (PR <https://github.com/{repo}/pull/{pr}|#{pr}>)" if pr else ""
 
 # Slack carries blame only, rest goes in the issue.
@@ -118,15 +190,8 @@ if create_issue:
     try:
         if not workflow_id:
             raise ValueError("run metadata unavailable")
-        marker = f"<!-- ci-failure:{workflow_id}:{branch} -->"
-        label_q = urllib.parse.quote(issue_label)
-        existing = None
-        for issue in json.loads(
-            run_gh(f"repos/{repo}/issues?state=open&labels={label_q}&per_page=100")
-        ):
-            if marker in (issue.get("body") or ""):
-                existing = issue
-                break
+        marker = tracking_marker(workflow_id)
+        existing = find_tracking_issue(workflow_id)
 
         if existing:
             run_gh(
@@ -216,22 +281,12 @@ if create_issue:
         issue_lines = []
         blame_lines.append("> :warning: could not file a tracking issue")
 
-slack_msg = [
-    f"*{workflow} Workflow `Failed`*",
-    f"> *Repo:* {repo} - run <{run_url}|{run_id}> on `{branch}`",
-    # An issue names its assignee, so the author line is only worth printing when
-    # no issue was filed.
-    *(issue_lines or blame_lines),
-]
-
-# The message is interpolated into a YAML double-quoted scalar in action.yml, so
-# quotes and backslashes have to survive that parse. The joining "\n" is added
-# after escaping: YAML turns it into the newline Slack renders.
-slack_msg = "\\n".join(
-    line.replace("\\", "\\\\").replace('"', '\\"') for line in slack_msg
+write_slack_output(
+    [
+        f"*{workflow} Workflow `Failed`*",
+        f"> *Repo:* {repo} - run <{run_url}|{run_id}> on `{branch}`",
+        # An issue names its assignee, so the author line is only worth printing
+        # when no issue was filed.
+        *(issue_lines or blame_lines),
+    ]
 )
-print(f"{slack_msg}")
-
-# Write multiline output to GITHUB_OUTPUT
-with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-    f.write(f"slack_msg<<EOF\n{slack_msg}\nEOF\n")
