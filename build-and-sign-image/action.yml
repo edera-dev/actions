@@ -95,67 +95,7 @@ runs:
       shell: bash
       env:
         EVENT: '${{ inputs.event }}'
-      run: |
-        echo "protect_version=$(git rev-parse --short=7 HEAD)" >> ${GITHUB_OUTPUT}
-
-        # Version tags only ever come from a real release event. Any other
-        # trigger that happens to land on an already-tagged commit — a push or
-        # nightly on a release branch sitting at its tag, or a manual rebuild —
-        # would otherwise republish vX.Y.Z/stable/latest onto a freshly built
-        # digest. Docker builds are not bit-for-bit reproducible, so that
-        # silently moves a released tag off the artifact that was released.
-        # See https://github.com/edera-dev/protect/pull/3692
-        if [ "${EVENT}" != "release" ]; then
-          echo "Event is '${EVENT}', not 'release': publishing only the short-sha tag."
-          exit 0
-        fi
-
-        # This is gross, but it detects whether we're checked out into a tag
-        # and sets the version tags accordingly. This is for a case of
-        # rebuilding an image from a tag. The docker metadata action only version
-        # tags on the "tag" event, it doesn't version tag when we checkout a tag
-        # on a workflow_dispatch
-        # See https://github.com/edera-dev/protect/issues/1248
-        if git describe --exact-match --tags &>/dev/null; then
-          input="$(git describe --exact-match --tags)"
-          if [[ "$input" =~ ^v([0-9]+)(\.([0-9]+))?(\.([0-9]+))?(-rc[0-9]+)?$ ]]; then
-            major="${BASH_REMATCH[1]}"
-            minor="${BASH_REMATCH[3]}"
-            patch="${BASH_REMATCH[5]}"
-            candidate="${BASH_REMATCH[6]}"
-
-            # Build version strings
-            full_with_v="v${major}"
-            full_no_v="${major}"
-
-            if [[ -n "$minor" ]]; then
-              full_with_v+=".${minor}"
-              full_no_v+=".${minor}"
-            fi
-
-            if [[ -n "$patch" ]]; then
-              full_with_v+=".${patch}"
-              full_no_v+=".${patch}"
-            fi
-
-            if [[ -n "$candidate" ]]; then
-              full_with_v+="${candidate}"
-              full_no_v+="${candidate}"
-            fi
-
-            # Output full_with_v tag and descending specificity
-            echo "protect_version_tag_full_with_v=$full_with_v" >> ${GITHUB_OUTPUT}
-            echo "protect_version_tag_full_no_v=$full_no_v" >> ${GITHUB_OUTPUT}
-
-            # Do not output broader specificity when there is a release candidate
-            if [[ -z "$candidate" ]]; then
-              echo "protect_version_tag_major_minor=${major}.${minor}" >> ${GITHUB_OUTPUT}
-              echo "protect_version_tag_major=${major}" >> ${GITHUB_OUTPUT}
-              echo "protect_version_tag_stable=stable" >> ${GITHUB_OUTPUT}
-              echo "protect_version_tag_latest=latest" >> ${GITHUB_OUTPUT}
-            fi
-          fi
-        fi
+      run: bash "${GITHUB_ACTION_PATH}/capture-version-tags.sh"
 
     - name: Docker meta
       uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
@@ -173,12 +113,16 @@ runs:
           #       events.
           type=raw,value=${{ steps.version.outputs.protect_version }}
 
-          # Tag version and stable on tag push
-          type=semver,pattern={{raw}}
-          type=semver,pattern={{version}}
-          type=semver,pattern={{major}}
-          type=semver,pattern={{major}}.{{minor}}
-          type=semver,pattern=stable
+          # Tag version and stable on a release only. These fire whenever
+          # github.ref is a tag ref, regardless of event, so a run dispatched
+          # from a tag ref would otherwise move the release tags onto a rebuild.
+          # `latest` rides along with these via the metadata action's default
+          # `flavor.latest=auto`, so gating them gates it too.
+          type=semver,pattern={{raw}},enable=${{ inputs.event == 'release' }}
+          type=semver,pattern={{version}},enable=${{ inputs.event == 'release' }}
+          type=semver,pattern={{major}},enable=${{ inputs.event == 'release' }}
+          type=semver,pattern={{major}}.{{minor}},enable=${{ inputs.event == 'release' }}
+          type=semver,pattern=stable,enable=${{ inputs.event == 'release' }}
 
           # Tag nightly on schedule event
           type=schedule,pattern=nightly
