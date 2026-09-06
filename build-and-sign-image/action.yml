@@ -10,7 +10,10 @@ inputs:
     description: 'Component image to build'
     required: true
   event:
-    description: 'Event triggering this workflow, used to determine the tags'
+    description: |
+      Event triggering this workflow. Version tags (vX.Y.Z, X.Y, X, stable,
+      latest) are only applied when this is 'release'; every other event
+      publishes the short-sha tag alone.
     required: true
   repositories:
     description: 'Repositories where images are pushed'
@@ -90,8 +93,22 @@ runs:
     - name: 'Capture version and tag list'
       id: version
       shell: bash
+      env:
+        EVENT: '${{ inputs.event }}'
       run: |
         echo "protect_version=$(git rev-parse --short=7 HEAD)" >> ${GITHUB_OUTPUT}
+
+        # Version tags only ever come from a real release event. Any other
+        # trigger that happens to land on an already-tagged commit — a push or
+        # nightly on a release branch sitting at its tag, or a manual rebuild —
+        # would otherwise republish vX.Y.Z/stable/latest onto a freshly built
+        # digest. Docker builds are not bit-for-bit reproducible, so that
+        # silently moves a released tag off the artifact that was released.
+        # See https://github.com/edera-dev/protect/pull/3692
+        if [ "${EVENT}" != "release" ]; then
+          echo "Event is '${EVENT}', not 'release': publishing only the short-sha tag."
+          exit 0
+        fi
 
         # This is gross, but it detects whether we're checked out into a tag
         # and sets the version tags accordingly. This is for a case of
