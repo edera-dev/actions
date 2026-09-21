@@ -1,0 +1,55 @@
+name: Push Metrics
+description: |
+  Pushes metrics in Prometheus exposition format to Edera's shared
+  Pushgateway (infra repo, observability/1-observability), authenticated
+  via this workflow's own GitHub Actions OIDC token - no stored secret.
+  Requires `permissions: id-token: write` on the calling job.
+
+  Any repo can call this; access is proven by holding a real GitHub
+  Actions OIDC token for the expected audience, not by a per-repo
+  allowlist, since this endpoint accepts metrics rather than granting
+  access to anything sensitive.
+
+inputs:
+  metrics:
+    description: >-
+      Prometheus exposition-format text to push. Mutually exclusive with
+      metrics-file. Must end in a newline - Prometheus's text format
+      requires it, and a missing one is rejected as malformed.
+    required: false
+  metrics-file:
+    description: >-
+      Path to a file containing Prometheus exposition-format text.
+      Mutually exclusive with metrics.
+    required: false
+  job:
+    description: 'Pushgateway grouping key job name, e.g. "protect-e2e"'
+    required: true
+  grouping-labels:
+    description: >-
+      Additional grouping key labels as comma-separated key=value pairs,
+      e.g. "env=nix,hypervisor=xen".
+    required: false
+    default: ''
+  pushgateway-url:
+    description: 'Base URL of the push-metrics endpoint.'
+    required: false
+    default: 'https://push-metrics-proxy.victorioushill-47ea6dae.eastus.azurecontainerapps.io'
+  audience:
+    description: 'OIDC token audience the endpoint expects.'
+    required: false
+    default: 'push-metrics'
+
+runs:
+  using: composite
+  steps:
+    - name: push metrics
+      shell: bash
+      env:
+        METRICS: ${{ inputs.metrics }}
+        METRICS_FILE: ${{ inputs.metrics-file }}
+        JOB: ${{ inputs.job }}
+        GROUPING_LABELS: ${{ inputs.grouping-labels }}
+        PUSHGATEWAY_URL: ${{ inputs.pushgateway-url }}
+        AUDIENCE: ${{ inputs.audience }}
+      run: python3 "${{ github.action_path }}/push.py"
