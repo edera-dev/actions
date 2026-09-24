@@ -31,43 +31,58 @@ check() {
   if "$@" >/dev/null 2>&1; then pass "$desc"; else fail "$desc"; fi
 }
 
+# The extractors read the whole file and never exit early, and every
+# predicate captures their output before matching. Piping an extractor into
+# `grep -q` under pipefail fails whenever grep finds its match and exits while
+# the extractor is still writing, which happens on some platforms and not
+# others.
+
 # job <name>: the lines of one job, up to the next job at the same indent.
 job() {
   awk -v head="  $1:" '
     $0 == head { on = 1; print; next }
-    on && /^  [a-z]/ { exit }
+    on && /^  [a-z]/ { on = 0 }
     on { print }
   ' "$WF"
 }
 # step <job> <step name>: the lines of one step of that job.
 step() {
-  job "$1" | awk -v head="      - name: $2" '
-    $0 == head { on = 1; print; next }
-    on && /^      - name: / { exit }
+  awk -v jhead="  $1:" -v shead="      - name: $2" '
+    $0 == jhead { injob = 1; next }
+    injob && /^  [a-z]/ { injob = 0; on = 0 }
+    injob && $0 == shead { on = 1; print; next }
+    on && /^      - name: / { on = 0 }
     on { print }
-  '
+  ' "$WF"
 }
 # permissions <job>: that job's permission lines, sorted and joined.
 permissions() {
-  job "$1" | awk '
+  local text
+  text=$(job "$1")
+  printf '%s\n' "$text" | awk '
     /^    permissions:/ { on = 1; next }
     on && /^      [a-z-]+: / { sub(/^ +/, ""); print; next }
-    on { exit }
+    on { on = 0 }
   ' | sort | tr '\n' ' '
 }
-steps_of() { job "$1" | sed -n 's/^      - name: //p'; }
+steps_of() {
+  local text
+  text=$(job "$1")
+  printf '%s\n' "$text" | sed -n 's/^      - name: //p'
+}
 
-job_has() { job "$1" | grep -qF -- "$2"; }
-job_lacks() { ! job "$1" | grep -qF -- "$2"; }
-step_has() { step "$1" "$2" | grep -qF -- "$3"; }
-step_lacks() { ! step "$1" "$2" | grep -qF -- "$3"; }
-step_matches() { step "$1" "$2" | grep -qE -- "$3"; }
+job_has() { local t; t=$(job "$1"); grep -qF -- "$2" <<<"$t"; }
+job_lacks() { local t; t=$(job "$1"); ! grep -qF -- "$2" <<<"$t"; }
+step_has() { local t; t=$(step "$1" "$2"); grep -qF -- "$3" <<<"$t"; }
+step_lacks() { local t; t=$(step "$1" "$2"); ! grep -qF -- "$3" <<<"$t"; }
+step_matches() { local t; t=$(step "$1" "$2"); grep -qE -- "$3" <<<"$t"; }
 step_exists() { [ -n "$(step "$1" "$2")" ]; }
 permissions_are() { [ "$(permissions "$1")" = "$2" ]; }
 tools_lack() {
-  local tools
-  tools=$(step review 'Build the prompt' | grep -o "tools='[^']*'")
-  [ -n "$tools" ] && ! printf '%s\n' "$tools" | grep -qE -- "$1"
+  local text tools
+  text=$(step review 'Build the prompt')
+  tools=$(grep -o "tools='[^']*'" <<<"$text")
+  [ -n "$tools" ] && ! grep -qE -- "$1" <<<"$tools"
 }
 fetch_steps_match() {
   local a b
