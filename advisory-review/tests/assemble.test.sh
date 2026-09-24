@@ -87,6 +87,7 @@ check "no run of blank lines is left behind" no_blank_run "$out"
 
 echo "# the links between the skills resolve"
 for skill in pr-review test-coverage-review; do
+  # shellcheck disable=SC2016  # the backticks are literal Markdown in the pattern
   for link in $(grep -oE '`(\.\./)?references/[a-z-]+\.md`' "$out/$skill/SKILL.md" | tr -d '`' | sort -u); do
     check "$skill links to $link" test -f "$out/$skill/$link"
   done
