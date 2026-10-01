@@ -95,9 +95,10 @@ only_trigger_is_workflow_call() {
     && grep -qE '^  workflow_call:$' "$WF"
 }
 no_forbidden_names() {
-  # The action being called and its own input names are the one exception.
+  # The action being called, its own input names and the model it runs are
+  # the only exceptions.
   ! grep -rniE 'protect|anthropic|claude' "$WF" "$CALLER" "$DIR" \
-    | grep -viE 'protects|protection|protected|uses: anthropics/claude-code-action@|anthropic_[a-z_]+_id:|claude_args:|tests/workflow\.test\.sh'
+    | grep -viE 'protects|protection|protected|uses: anthropics/claude-code-action@|anthropic_[a-z_]+_id:|claude_args:|--model claude-|tests/workflow\.test\.sh'
 }
 
 echo "# the workflow is only ever called"

@@ -60,7 +60,7 @@ jobs:
       && github.event.pull_request.draft == false
       && !endsWith(github.actor, '[bot]')
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 60
     permissions:
       contents: read
       pull-requests: read
@@ -257,7 +257,7 @@ jobs:
         id: model
         if: steps.prompt.outcome == 'success'
         continue-on-error: true
-        uses: anthropics/claude-code-action@e8c2d7c16c018cf1e694711c1c07a5f5db2b5eb1 # v1
+        uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829 # v1
         env:
           GH_TOKEN: ${{ github.token }}
         with:
@@ -274,6 +274,8 @@ jobs:
           prompt: ${{ steps.prompt.outputs.prompt }}
           claude_args: |
             --max-turns 150
+            --model claude-opus-5-5
+            --effort max
             --add-dir ${{ runner.temp }}/advisory-review
             --allowedTools "${{ steps.prompt.outputs.tools }}"
 
