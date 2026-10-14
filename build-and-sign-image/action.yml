@@ -213,7 +213,7 @@ runs:
           "${primary_repo}:${PROTECT_VERSION}" \
           --format '{{json .Manifest}}' | jq -r '.digest')"
         : "${DIGEST:?could not resolve image digest}"
-        echo "digest=${DIGEST}" >> "${GITHUB_OUTPUT}"
+        echo "digest=${DIGEST}" | tee --append "${GITHUB_OUTPUT}"
       env:
         REPOSITORIES: ${{ inputs.repositories }}
         PROTECT_VERSION: ${{ steps.version.outputs.protect_version }}
