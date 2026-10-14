@@ -192,7 +192,6 @@ runs:
           context: .
           file: ${{ hashFiles(format('./images/Dockerfile.{0}', inputs.dockerfile || inputs.component)) != '' && format('./images/Dockerfile.{0}', inputs.dockerfile || inputs.component) || format('./images/Containerfile.{0}', inputs.dockerfile || inputs.component) }}
           target: ${{ inputs.target }}
-          platforms: linux/amd64
           tags: ${{ steps.flattened-tags.outputs.tags }}
           push: "${{ inputs.push }}"
           build-args: |
