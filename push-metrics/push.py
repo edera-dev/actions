@@ -13,9 +13,17 @@ import snappy
 
 metrics = os.environ.get("METRICS", "")
 metrics_file = os.environ.get("METRICS_FILE", "")
-remote_write_url = os.environ["REMOTE_WRITE_URL"]
-audience = os.environ["AUDIENCE"]
+azure_remote_write_url = os.environ["AZURE_REMOTE_WRITE_URL"]
+azure_tenant_id = os.environ["AZURE_TENANT_ID"]
+azure_client_id = os.environ["AZURE_CLIENT_ID"]
+legacy_remote_write_url = os.environ.get("LEGACY_REMOTE_WRITE_URL", "")
+legacy_audience = os.environ.get("LEGACY_AUDIENCE", "")
 timestamp_ms_env = os.environ.get("TIMESTAMP_MS", "")
+
+AZURE_TOKEN_EXCHANGE_AUDIENCE = "api://AzureADTokenExchange"
+AZURE_MONITOR_SCOPE = "https://monitor.azure.com/.default"
+MAX_ATTEMPTS = 5
+RETRYABLE_STATUSES = {408, 429, 500, 502, 503, 504}
 
 id_token_request_token = os.environ.get("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
 id_token_request_url = os.environ.get("ACTIONS_ID_TOKEN_REQUEST_URL")
@@ -85,10 +93,72 @@ def build_write_request(samples, ts_ms):
     return wr
 
 
-def fetch_json(url: str, headers: dict) -> dict:
-    request = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(request) as response:
+def with_retries(description: str, fn):
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        try:
+            return fn()
+        except urllib.error.HTTPError as e:
+            body = e.read().decode(errors="replace")
+            if e.code not in RETRYABLE_STATUSES or attempt == MAX_ATTEMPTS:
+                raise RuntimeError(f"{description} failed: {e.code} {body}") from e
+            print(f"{description} attempt {attempt} failed: {e.code} {body}", file=sys.stderr)
+        except urllib.error.URLError as e:
+            if attempt == MAX_ATTEMPTS:
+                raise RuntimeError(f"{description} failed: {e.reason}") from e
+            print(f"{description} attempt {attempt} failed: {e.reason}", file=sys.stderr)
+        time.sleep(2 ** attempt)
+
+
+def fetch_json(request: urllib.request.Request) -> dict:
+    with urllib.request.urlopen(request, timeout=30) as response:
         return json.load(response)
+
+
+def github_oidc_token(audience: str) -> str:
+    token_url = f"{id_token_request_url}&audience={urllib.parse.quote(audience)}"
+    request = urllib.request.Request(
+        token_url, headers={"Authorization": f"bearer {id_token_request_token}"}
+    )
+    return with_retries("GitHub OIDC token request", lambda: fetch_json(request))["value"]
+
+
+def azure_monitor_token() -> str:
+    body = urllib.parse.urlencode(
+        {
+            "client_id": azure_client_id,
+            "grant_type": "client_credentials",
+            "scope": AZURE_MONITOR_SCOPE,
+            "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+            "client_assertion": github_oidc_token(AZURE_TOKEN_EXCHANGE_AUDIENCE),
+        }
+    ).encode()
+    request = urllib.request.Request(
+        f"https://login.microsoftonline.com/{azure_tenant_id}/oauth2/v2.0/token",
+        data=body,
+        method="POST",
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    return with_retries("Azure token exchange", lambda: fetch_json(request))["access_token"]
+
+
+def push(url: str, bearer_token: str) -> int:
+    request = urllib.request.Request(
+        url,
+        data=compressed_body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {bearer_token}",
+            "Content-Encoding": "snappy",
+            "Content-Type": "application/x-protobuf",
+            "X-Prometheus-Remote-Write-Version": "0.1.0",
+        },
+    )
+
+    def send():
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return response.status
+
+    return with_retries(f"push to {url}", send)
 
 
 samples = parse_exposition(metrics_text)
@@ -99,26 +169,20 @@ if not samples:
 write_request = build_write_request(samples, timestamp_ms)
 compressed_body = snappy.compress(write_request.SerializeToString())
 
-token_url = f"{id_token_request_url}&audience={urllib.parse.quote(audience)}"
-token_response = fetch_json(
-    token_url, {"Authorization": f"bearer {id_token_request_token}"}
-)
-oidc_token = token_response["value"]
+failed = False
 
-request = urllib.request.Request(
-    remote_write_url,
-    data=compressed_body,
-    method="POST",
-    headers={
-        "Authorization": f"Bearer {oidc_token}",
-        "Content-Encoding": "snappy",
-        "Content-Type": "application/x-protobuf",
-        "X-Prometheus-Remote-Write-Version": "0.1.0",
-    },
-)
 try:
-    with urllib.request.urlopen(request) as response:
-        print(f"pushed {len(samples)} sample(s) to {remote_write_url}: {response.status}")
-except urllib.error.HTTPError as e:
-    print(f"::error::push to {remote_write_url} failed: {e.status} {e.read().decode()}", file=sys.stderr)
-    sys.exit(1)
+    status = push(azure_remote_write_url, azure_monitor_token())
+    print(f"pushed {len(samples)} sample(s) to Azure Monitor: {status}")
+except RuntimeError as e:
+    print(f"::error::{e}", file=sys.stderr)
+    failed = True
+
+if legacy_remote_write_url:
+    try:
+        status = push(legacy_remote_write_url, github_oidc_token(legacy_audience))
+        print(f"pushed {len(samples)} sample(s) to {legacy_remote_write_url}: {status}")
+    except RuntimeError as e:
+        print(f"::warning::{e}", file=sys.stderr)
+
+sys.exit(1 if failed else 0)

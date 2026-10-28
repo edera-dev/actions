@@ -1,18 +1,20 @@
 name: Push Metrics
 description: |
-  Pushes metrics in Prometheus exposition format directly to Edera's shared
-  Prometheus (infra repo, observability/1-observability) via remote_write,
-  authenticated via this workflow's own GitHub Actions OIDC token - no
-  stored secret. Requires `permissions: id-token: write` on the calling job.
+  Pushes metrics in Prometheus exposition format to Edera's Azure Monitor
+  managed Prometheus workspace (infra repo, observability/1-observability,
+  ci-metrics) via remote_write. Authenticates by exchanging this workflow's
+  own GitHub Actions OIDC token for an Entra token as the ci-metrics writer
+  identity, whose flexible federated credential trusts any edera-dev repo -
+  no stored secret. Requires `permissions: id-token: write` on the calling
+  job.
+
+  Until reads move off the self-hosted Prometheus, samples are also pushed
+  to it on a best-effort basis: a failure there is a warning, while a
+  failure to push to Azure Monitor fails the step. Both pushes retry
+  transient errors with backoff.
 
   Each pushed sample gets its own real timestamp (now, or an explicit
-  override) and is stored once - unlike a Pushgateway-backed push, nothing
-  re-exposes the same value on every Prometheus scrape.
-
-  Any repo can call this; access is proven by holding a real GitHub
-  Actions OIDC token for the expected audience, not by a per-repo
-  allowlist, since this endpoint accepts metrics rather than granting
-  access to anything sensitive.
+  override) and is stored once.
 
 inputs:
   metrics:
@@ -31,12 +33,26 @@ inputs:
       time this action runs.
     required: false
     default: ''
-  remote-write-url:
-    description: 'remote_write endpoint of the push-metrics proxy.'
+  azure-remote-write-url:
+    description: 'remote_write endpoint of the ci-metrics data collection rule.'
+    required: false
+    default: 'https://ci-metrics-dce-8033.eastus-1.metrics.ingest.monitor.azure.com/dataCollectionRules/dcr-7f9422db7564437fa01ecf7d9fdbe5b4/streams/Microsoft-PrometheusMetrics/api/v1/write?api-version=2023-04-24'
+  azure-tenant-id:
+    description: 'Entra tenant of the ci-metrics writer identity.'
+    required: false
+    default: '1b3c00dc-ba64-41ea-a1ae-6b8fcc034c72'
+  azure-client-id:
+    description: 'Client ID of the ci-metrics writer identity.'
+    required: false
+    default: '354c38a6-dc14-4ff9-ad80-673ba7a6ebca'
+  legacy-remote-write-url:
+    description: >-
+      remote_write endpoint of the self-hosted Prometheus push-metrics
+      proxy. Set to an empty string to skip the best-effort legacy push.
     required: false
     default: 'https://push-metrics-proxy.victorioushill-47ea6dae.eastus.azurecontainerapps.io/api/v1/write'
-  audience:
-    description: 'OIDC token audience the endpoint expects.'
+  legacy-audience:
+    description: 'OIDC token audience the legacy endpoint expects.'
     required: false
     default: 'push-metrics'
 
@@ -53,6 +69,9 @@ runs:
         METRICS: ${{ inputs.metrics }}
         METRICS_FILE: ${{ inputs.metrics-file }}
         TIMESTAMP_MS: ${{ inputs.timestamp-ms }}
-        REMOTE_WRITE_URL: ${{ inputs.remote-write-url }}
-        AUDIENCE: ${{ inputs.audience }}
+        AZURE_REMOTE_WRITE_URL: ${{ inputs.azure-remote-write-url }}
+        AZURE_TENANT_ID: ${{ inputs.azure-tenant-id }}
+        AZURE_CLIENT_ID: ${{ inputs.azure-client-id }}
+        LEGACY_REMOTE_WRITE_URL: ${{ inputs.legacy-remote-write-url }}
+        LEGACY_AUDIENCE: ${{ inputs.legacy-audience }}
       run: python3 "${{ github.action_path }}/push.py"
