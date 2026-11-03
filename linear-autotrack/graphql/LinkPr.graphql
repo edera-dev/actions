@@ -1,0 +1,7 @@
+# Links the PR through Linear's GitHub integration. Fails for a repository the
+# integration cannot see, in which case the caller falls back to LinkUrl.
+mutation LinkPr($issueId: String!, $url: String!) {
+  attachmentLinkGitHubPR(issueId: $issueId, url: $url) {
+    success
+  }
+}

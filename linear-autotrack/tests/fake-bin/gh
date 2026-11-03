@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# A stand-in for the gh CLI, used by autotrack.test.sh.
+#
+# `gh pr view` prints $FAKE/pr.json (or $FAKE/pr-fresh.json once it exists and
+# a view has already happened), `gh pr comment` appends the body to
+# $FAKE/comments.log, and `gh api repos/R/issues/N[/comments]` prints
+# $FAKE/issues/N.json or N-comments.json. A --jq filter is applied with the
+# real jq. Every call is logged to $FAKE/gh.log.
+set -euo pipefail
+: "${FAKE:?FAKE is not set}"
+printf '%q ' "$@" >>"$FAKE/gh.log"
+printf '\n' >>"$FAKE/gh.log"
+
+filter='.'
+args=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --jq) filter=$2; shift 2 ;;
+    --json) shift 2 ;;
+    --paginate) shift ;;
+    --body-file)
+      { cat "$2"; echo '---'; } >>"$FAKE/comments.log"
+      shift 2
+      ;;
+    *) args+=("$1"); shift ;;
+  esac
+done
+
+case "${args[0]} ${args[1]:-}" in
+  'pr view')
+    src=$FAKE/pr.json
+    if [ -f "$FAKE/pr-fresh.json" ] && [ -f "$FAKE/viewed" ]; then src=$FAKE/pr-fresh.json; fi
+    touch "$FAKE/viewed"
+    jq -r "$filter" "$src"
+    ;;
+  'pr comment') ;;
+  api\ repos/*)
+    path=${args[1]}
+    case "$path" in
+      */comments) f=$FAKE/issues/$(basename "$(dirname "$path")")-comments.json ;;
+      *) f=$FAKE/issues/$(basename "$path").json ;;
+    esac
+    [ -f "$f" ] || { echo "fake gh: 404 $path" >&2; exit 1; }
+    jq -r "$filter" "$f"
+    ;;
+  *)
+    echo "fake gh: unsupported: ${args[*]}" >&2
+    exit 1
+    ;;
+esac

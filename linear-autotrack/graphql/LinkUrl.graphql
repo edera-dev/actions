@@ -1,0 +1,5 @@
+mutation LinkUrl($issueId: String!, $url: String!, $title: String!) {
+  attachmentCreate(input: { issueId: $issueId, url: $url, title: $title }) {
+    success
+  }
+}

@@ -1,0 +1,15 @@
+# The issues already linked to a PR, from either side.
+query PrIssues($url: String!) {
+  attachmentsForURL(url: $url) {
+    nodes {
+      issue {
+        id
+        identifier
+        url
+        description
+        state { type }
+        team { id }
+      }
+    }
+  }
+}
