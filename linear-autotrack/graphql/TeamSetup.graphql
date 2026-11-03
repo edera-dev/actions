@@ -1,0 +1,14 @@
+# What a new issue in this team needs: the auto-tracked label, the started
+# state, and the active and next cycles (an issue opened late in a cycle goes
+# into the next one).
+query TeamSetup($teamId: String!) {
+  team(id: $teamId) {
+    labels(filter: { name: { eq: "auto-tracked" } }) {
+      nodes { id name }
+    }
+    states { nodes { id name type position } }
+    cycles(filter: { or: [{ isActive: { eq: true } }, { isNext: { eq: true } }] }) {
+      nodes { id name number isActive isNext endsAt }
+    }
+  }
+}

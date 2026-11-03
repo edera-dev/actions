@@ -93,3 +93,30 @@ jobs:
         run: |
           shellcheck advisory-review/post-pr-review.sh advisory-review/tests/*.sh \
             advisory-review/tests/fake-gh/gh
+  linear-autotrack:
+    # The autotrack script against a fake gh and a fake Linear API. Loading the
+    # action with no key also runs the manifest parser and the path a fork's
+    # pull request takes, which must exit 0 without calling anything.
+    name: linear autotrack
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - name: checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
+        with:
+          persist-credentials: false
+      - name: script
+        run: bash linear-autotrack/tests/autotrack.test.sh
+      - name: shellcheck
+        run: |
+          shellcheck linear-autotrack/autotrack.sh linear-autotrack/tests/*.sh \
+            linear-autotrack/tests/fake-bin/gh linear-autotrack/tests/fake-bin/curl
+      - name: action with no key
+        if: github.event_name == 'pull_request'
+        uses: ./linear-autotrack
+        with:
+          team: SELFTEST
+          linear-api-key: ''

@@ -1,0 +1,40 @@
+name: 'Linear autotrack'
+description: >
+  Files a Linear issue for a pull request opened without one, assigned to the
+  author and placed in the team's current cycle, and moves that issue to Done
+  when the pull request merges. A pull request that names any Linear issue key
+  in its branch, title or body is left alone. Call it from a pull_request
+  workflow (types opened, reopened, ready_for_review and closed) in a job with
+  contents read, pull-requests write and issues read.
+
+inputs:
+  team:
+    description: 'Key of the Linear team new issues are filed in, for example ENG.'
+    required: true
+  linear-api-key:
+    description: >
+      Linear API key that can create and update issues in that team. When it is
+      empty, as on a pull request from a fork, the action warns and does nothing.
+    required: true
+  github-token:
+    description: 'Token for reading the pull request and commenting on it.'
+    required: false
+    default: ${{ github.token }}
+  grace-minutes:
+    description: >
+      Minutes to wait before filing, so an author who adds the issue key just
+      after opening the pull request does not get a second issue.
+    required: false
+    default: '10'
+
+runs:
+  using: 'composite'
+  steps:
+  - name: Track the pull request in Linear
+    shell: bash
+    env:
+      TEAM: ${{ inputs.team }}
+      LINEAR_API_KEY: ${{ inputs.linear-api-key }}
+      GH_TOKEN: ${{ inputs.github-token }}
+      GRACE_MINUTES: ${{ inputs.grace-minutes }}
+    run: bash "$GITHUB_ACTION_PATH/autotrack.sh"

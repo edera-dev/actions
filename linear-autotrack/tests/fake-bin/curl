@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# A stand-in for curl when it talks to Linear, used by autotrack.test.sh.
+#
+# Reads the request body from --data-binary @file, takes the operation name
+# from its query, logs "<operation> <variables>" to $FAKE/linear.log and writes
+# $FAKE/linear/<operation>.json as the response. A file
+# $FAKE/linear/<operation>.status overrides the HTTP status (default 200), and
+# an operation with no response file fails the test run loudly.
+set -euo pipefail
+: "${FAKE:?FAKE is not set}"
+
+out='' data=''
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) out=$2; shift 2 ;;
+    --data-binary) data=${2#@}; shift 2 ;;
+    -H)
+      # The key must arrive through a header file, never as an argument.
+      case "$2" in
+        @*) grep -q '^Authorization: ' "${2#@}" ;;
+        Authorization*) echo "fake curl: key passed on the command line" >&2; exit 1 ;;
+      esac
+      shift 2
+      ;;
+    -w) shift 2 ;;
+    *) shift ;;
+  esac
+done
+
+op=$(jq -r '.query' "$data" | grep -oE '^(query|mutation) [A-Za-z]+' | head -n 1 | cut -d' ' -f2)
+printf '%s %s\n' "$op" "$(jq -c '.variables' "$data")" >>"$FAKE/linear.log"
+if [ ! -f "$FAKE/linear/$op.json" ]; then
+  echo "fake curl: no response for $op" >&2
+  exit 1
+fi
+cp "$FAKE/linear/$op.json" "$out"
+cat "$FAKE/linear/$op.status" 2>/dev/null || printf 200

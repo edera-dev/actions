@@ -1,0 +1,7 @@
+# Every team key in the workspace, so a key in the PR can be told apart from
+# text that merely looks like one, and the caller's team key can be resolved.
+query Teams {
+  teams(first: 250) {
+    nodes { id key }
+  }
+}
