@@ -1,3 +1,4 @@
+import http.client
 import json
 import os
 import re
@@ -102,10 +103,15 @@ def with_retries(description: str, fn):
             if e.code not in RETRYABLE_STATUSES or attempt == MAX_ATTEMPTS:
                 raise RuntimeError(f"{description} failed: {e.code} {body}") from e
             print(f"{description} attempt {attempt} failed: {e.code} {body}", file=sys.stderr)
-        except urllib.error.URLError as e:
+        except (OSError, http.client.HTTPException) as e:
+            # URLError (refused, DNS, TLS) is an OSError. Once the request
+            # is sent, urlopen raises outside URLError: TimeoutError when no
+            # answer comes in time, RemoteDisconnected when the connection
+            # drops.
+            reason = getattr(e, "reason", e)
             if attempt == MAX_ATTEMPTS:
-                raise RuntimeError(f"{description} failed: {e.reason}") from e
-            print(f"{description} attempt {attempt} failed: {e.reason}", file=sys.stderr)
+                raise RuntimeError(f"{description} failed: {reason}") from e
+            print(f"{description} attempt {attempt} failed: {reason}", file=sys.stderr)
         time.sleep(2 ** attempt)
 
 
