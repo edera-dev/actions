@@ -38,6 +38,9 @@ jobs:
           connection-string-rw: 'BlobEndpoint=https://example.invalid;SharedAccessSignature=fake-rw'
           connection-string-ro: 'BlobEndpoint=https://example.invalid;SharedAccessSignature=fake-ro'
           key-prefix: selftest
+      - name: which tags an image build publishes
+        run: bash .github/tests/capture-version-tags.test.sh
+
       - name: assert action contracts
         env:
           CONFIGURED: ${{ steps.sccache.outputs.configured }}
