@@ -50,7 +50,7 @@ inputs:
       remote_write endpoint of the self-hosted Prometheus push-metrics
       proxy. Set to an empty string to skip the best-effort legacy push.
     required: false
-    default: 'https://push-metrics-proxy.victorioushill-47ea6dae.eastus.azurecontainerapps.io/api/v1/write'
+    default: 'https://push-metrics.axies.dev/api/v1/write'
   legacy-audience:
     description: 'OIDC token audience the legacy endpoint expects.'
     required: false
