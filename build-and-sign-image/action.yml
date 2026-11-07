@@ -30,6 +30,9 @@ inputs:
   target:
     description: 'Build target stage to use'
     required: false
+  platforms:
+    description: 'Comma-separated list of platforms to build for'
+    default: 'linux/amd64'
   push:
     description: 'To push or not'
     default: 'true'
@@ -56,6 +59,10 @@ runs:
   steps:
     - name: 'Install cosign'
       uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+    - name: 'Setup QEMU'
+      if: ${{ (inputs.platforms || 'linux/amd64') != 'linux/amd64' }}
+      uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
 
     - name: 'Setup docker buildx'
       uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
@@ -192,7 +199,7 @@ runs:
           context: .
           file: ${{ hashFiles(format('./images/Dockerfile.{0}', inputs.dockerfile || inputs.component)) != '' && format('./images/Dockerfile.{0}', inputs.dockerfile || inputs.component) || format('./images/Containerfile.{0}', inputs.dockerfile || inputs.component) }}
           target: ${{ inputs.target }}
-          platforms: linux/amd64
+          platforms: ${{ inputs.platforms || 'linux/amd64' }}
           tags: ${{ steps.flattened-tags.outputs.tags }}
           push: "${{ inputs.push }}"
           build-args: |
@@ -313,13 +320,23 @@ runs:
         : "${DIGEST:?could not resolve image digest}"
         echo "digest=${DIGEST}" >> "${GITHUB_OUTPUT}"
 
-        # 1) Scan the pushed composite image itself. Drop per-file noise; keep
-        #    package + binary (cargo-auditable) catalogers. Zero components is
-        #    expected for pure copy-only composites and is not an error here.
-        echo "Scanning ${primary_repo}@${DIGEST}"
-        "${SYFT_CMD}" "registry:${primary_repo}@${DIGEST}" \
-          --select-catalogers "-file" \
-          -o "cyclonedx-json=local.cdx.json"
+        # 1) Scan the pushed composite image itself, once per platform. Drop
+        #    per-file noise; keep package + binary (cargo-auditable) catalogers.
+        #    Zero components is expected for pure copy-only composites and is
+        #    not an error here.
+        LOCAL_SBOMS=""
+        IFS=',' read -ra platforms <<< "${PLATFORMS}"
+        for platform in "${platforms[@]}"; do
+          platform="$(echo "${platform}" | xargs)"
+          [ -n "${platform}" ] || continue
+          out="local-${platform//\//_}.cdx.json"
+          echo "Scanning ${primary_repo}@${DIGEST} (${platform})"
+          "${SYFT_CMD}" "registry:${primary_repo}@${DIGEST}" \
+            --platform "${platform}" \
+            --select-catalogers "-file" \
+            -o "cyclonedx-json=${out}"
+          LOCAL_SBOMS="${LOCAL_SBOMS:+${LOCAL_SBOMS},}${out}"
+        done
 
         # 2) Enumerate the bases this composite copies from and pull each base's
         #    CycloneDX attestation, keyed by an immutable digest.
@@ -386,7 +403,7 @@ runs:
         fi
 
         # 3) Merge local scan + extra scan + base SBOMs into protect-${COMPONENT}.cdx.json.
-        LOCAL_SBOM=local.cdx.json EXTRA_SBOM="${EXTRA_SBOM}" BASES_DIR=bases \
+        LOCAL_SBOM="${LOCAL_SBOMS}" EXTRA_SBOM="${EXTRA_SBOM}" BASES_DIR=bases \
           python3 "${GITHUB_ACTION_PATH}/sbom/merge.py"
 
         count="$(jq '(.components // []) | length' "protect-${COMPONENT}.cdx.json")"
@@ -412,6 +429,7 @@ runs:
         TARGET: ${{ inputs.target }}
         SBOM_STRICT: ${{ inputs.sbom_strict }}
         SBOM_EXTRA_SCAN_TARGET: ${{ inputs.sbom_extra_scan_target }}
+        PLATFORMS: ${{ inputs.platforms || 'linux/amd64' }}
         GITHUB_ACTION_PATH: ${{ github.action_path }}
 
     - name: 'Cosign attest SBOM to all registries'
