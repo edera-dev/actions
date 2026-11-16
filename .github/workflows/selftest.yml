@@ -120,3 +120,21 @@ jobs:
         with:
           team: SELFTEST
           linear-api-key: ''
+  build-and-sign-image:
+    # version-tags.sh against a scratch repository's release tags: which
+    # release takes latest, stable, <major> and <major>.<minor>.
+    name: build and sign image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - name: checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
+        with:
+          persist-credentials: false
+      - name: version tags
+        run: bash build-and-sign-image/tests/version-tags.test.sh
+      - name: shellcheck
+        run: shellcheck build-and-sign-image/version-tags.sh build-and-sign-image/tests/*.sh
