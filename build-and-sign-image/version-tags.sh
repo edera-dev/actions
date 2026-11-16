@@ -4,6 +4,13 @@
 # writes them to GITHUB_OUTPUT as protect_version_tag_*. Every image also gets
 # protect_version, from PROTECT_VERSION.
 #
+# The release is RELEASE_TAG when the caller has resolved one (v0.0.0 means
+# none), so the image tags match the version stamped into the build. It must
+# point at the checked-out commit. Without it, the release is picked from the
+# commit's own tags: the highest final release, else the highest release
+# candidate. Not git describe, which picks among several tags on one commit by
+# tag type and creation time, so a final release can come out as its RC.
+#
 # A commit at a release tag (vX.Y.Z, optionally -rcN) gets vX.Y.Z and X.Y.Z.
 # The moving tags (X.Y, X, stable, latest) go only to the highest final
 # release in their range, judged by version rather than by which build
@@ -31,8 +38,23 @@ highest_final() {
     tail -n 1
 }
 
-input="$(git describe --exact-match --tags 2>/dev/null)" || exit 0
-[[ "${input}" =~ ^v([0-9]+)(\.([0-9]+))?(\.([0-9]+))?(-rc[0-9]+)?$ ]] || exit 0
+version_re='^v([0-9]+)(\.([0-9]+))?(\.([0-9]+))?(-rc[0-9]+)?$'
+
+if [[ -n "${RELEASE_TAG:-}" && "${RELEASE_TAG}" != v0.0.0 ]]; then
+  input="${RELEASE_TAG}"
+  if [[ "$(git rev-parse -q --verify "refs/tags/${input}^{commit}" || true)" != "$(git rev-parse HEAD)" ]]; then
+    echo "::error::RELEASE_TAG ${input} does not point at the checked-out commit"
+    exit 1
+  fi
+else
+  tags="$(git tag --points-at HEAD | { grep -E "${version_re}" || true; })"
+  input="$(printf '%s\n' "${tags}" | { grep -v -- '-rc' || true; } | sort -V | tail -n 1)"
+  if [[ -z "${input}" ]]; then
+    input="$(printf '%s\n' "${tags}" | { grep -- '-rc' || true; } | sort -V | tail -n 1)"
+  fi
+fi
+
+[[ "${input}" =~ ${version_re} ]] || exit 0
 
 major="${BASH_REMATCH[1]}"
 minor="${BASH_REMATCH[3]}"

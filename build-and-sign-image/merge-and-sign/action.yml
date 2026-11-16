@@ -132,6 +132,7 @@ runs:
       shell: bash
       env:
         PROTECT_VERSION: ${{ inputs.short_sha }}
+        RELEASE_TAG: ${{ inputs.build_semver }}
         GITHUB_ACTION_PATH: ${{ github.action_path }}
       run: |
         "${GITHUB_ACTION_PATH}/../version-tags.sh"
