@@ -95,10 +95,10 @@ only_trigger_is_workflow_call() {
     && grep -qE '^  workflow_call:$' "$WF"
 }
 no_forbidden_names() {
-  # The action being called, its own input names and the model it runs are
-  # the only exceptions.
+  # The action being called, its own input names, the model it runs and the
+  # hosts it needs are the only exceptions.
   ! grep -rniE 'protect|anthropic|claude' "$WF" "$CALLER" "$DIR" \
-    | grep -viE 'protects|protection|protected|uses: anthropics/claude-code-action@|anthropic_[a-z_]+_id:|claude_args:|--model claude-|tests/workflow\.test\.sh'
+    | grep -viE 'protects|protection|protected|uses: anthropics/claude-code-action@|anthropic_[a-z_]+_id:|claude_args:|--model claude-|(anthropic\.com|claude\.ai):443$|tests/workflow\.test\.sh'
 }
 
 echo "# the workflow is only ever called"
@@ -123,6 +123,9 @@ check "the review job never runs the publisher" job_lacks review 'post-pr-review
 check "the model's tools include no unrestricted git" tools_lack 'Bash\(git:\*\)'
 check "or anything that runs the publisher" tools_lack 'post-pr-review'
 check "or a pull request write command" tools_lack 'gh pr (comment|review|edit|merge|close)'
+check "web fetch and search are disallowed" step_has review Review '--disallowedTools "WebFetch,WebSearch"'
+check "egress is blocked outside the allowed hosts" step_has review 'Harden runner' 'egress-policy: block'
+check "and no allowed host is a wildcard" step_lacks review 'Harden runner' '*'
 check "the prompt tells the model it cannot post" step_has review 'Build the prompt' 'You cannot post to the pull request'
 check "the section is handed over only when one was written" \
   step_has review 'Hand the section over' "steps.state.outputs.state == 'section'"

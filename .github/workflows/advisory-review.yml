@@ -68,10 +68,23 @@ jobs:
     outputs:
       state: ${{ steps.state.outputs.state }}
     steps:
+      # The model can run `gh api --hostname <any host>`, so egress is the only
+      # thing that stops it sending what it can read to an arbitrary server.
+      # These are the hosts the action, its installer and the model's tools
+      # use; the runner's own endpoints are allowed by harden-runner itself.
       - name: Harden runner
         uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
         with:
-          egress-policy: audit
+          egress-policy: block
+          allowed-endpoints: >
+            api.anthropic.com:443
+            api.github.com:443
+            claude.ai:443
+            downloads.claude.ai:443
+            github.com:443
+            objects.githubusercontent.com:443
+            registry.npmjs.org:443
+            release-assets.githubusercontent.com:443
 
       # A wrong check name is a broken caller, so this fails the job rather
       # than going quiet. Values pasted into repository variables can pick up
@@ -260,6 +273,9 @@ jobs:
         uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829 # v1
         env:
           GH_TOKEN: ${{ github.token }}
+          # Telemetry and error reports go to hosts the egress policy blocks.
+          DISABLE_TELEMETRY: '1'
+          DISABLE_ERROR_REPORTING: '1'
         with:
           # This job's own token, which is read-only. Without it the action
           # exchanges the identity token for an app token with contents, pull
@@ -278,6 +294,7 @@ jobs:
             --effort max
             --add-dir ${{ runner.temp }}/advisory-review
             --allowedTools "${{ steps.prompt.outputs.tools }}"
+            --disallowedTools "WebFetch,WebSearch"
 
       # section: the model wrote a section to publish.
       # unfinished: the review was set up to run and produced nothing, so the
