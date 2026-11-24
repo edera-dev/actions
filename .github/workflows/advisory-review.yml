@@ -67,6 +67,9 @@ jobs:
       id-token: write
     outputs:
       state: ${{ steps.state.outputs.state }}
+    # gh sends telemetry to a host the egress policy blocks.
+    env:
+      DO_NOT_TRACK: '1'
     steps:
       # The model can run `gh api --hostname <any host>`, so egress is the only
       # thing that stops it sending what it can read to an arbitrary server.

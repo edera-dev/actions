@@ -126,6 +126,7 @@ check "or a pull request write command" tools_lack 'gh pr (comment|review|edit|m
 check "web fetch and search are disallowed" step_has review Review '--disallowedTools "WebFetch,WebSearch"'
 check "egress is blocked outside the allowed hosts" step_has review 'Harden runner' 'egress-policy: block'
 check "and no allowed host is a wildcard" step_lacks review 'Harden runner' '*'
+check "and nothing in the job reports telemetry to a blocked host" job_has review "DO_NOT_TRACK: '1'"
 check "the prompt tells the model it cannot post" step_has review 'Build the prompt' 'You cannot post to the pull request'
 check "the section is handed over only when one was written" \
   step_has review 'Hand the section over' "steps.state.outputs.state == 'section'"
