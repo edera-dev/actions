@@ -29,9 +29,10 @@ as two jobs:
 
 The split means text anyone can leave on a public pull request never reaches a
 model that holds a token able to write to it. The model can still read its own
-environment and has open network egress, so a repository whose cloud
-federation trusts identity tokens from pull request runs should scope that
-trust to specific workflows.
+environment, so a repository whose cloud federation trusts identity tokens
+from pull request runs should scope that trust to specific workflows. The
+review job blocks network egress except to GitHub, the model's API and the
+action's installer, and the model has no web fetch or search tools.
 
 A reusable workflow gets none of its own repository's files, so both jobs read
 `job_workflow_ref` from their identity token and fetch `advisory-review/` from
