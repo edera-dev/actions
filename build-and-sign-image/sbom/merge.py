@@ -11,8 +11,9 @@ what the composite actually ships.
 Reads from the environment:
   COMPONENT        composite component name (-> metadata.component + output file)
   PROTECT_VERSION  composite version (the short-sha tag)
-  LOCAL_SBOM       path to the syft scan of the pushed composite (may be absent
-                   or contain zero components for FROM-scratch composites)
+  LOCAL_SBOM       comma-separated paths to the syft scans of the pushed
+                   composite, one per platform (may be absent or contain zero
+                   components for FROM-scratch composites)
   EXTRA_SBOM       optional path to an extra local syft scan. Its components and 
                    inner dependencies are unioned, its metadata.component is ignored.
   BASES_DIR        directory of <base>.cdx.json predicates already extracted from
@@ -61,9 +62,11 @@ def main():
         seen.add(key)
         components.append(comp)
 
-    # Local scan of the pushed composite first.
-    local = load(local_path) if local_path else None
-    if local:
+    # Local scans of the pushed composite first.
+    for path in filter(None, local_path.split(",")):
+        local = load(path)
+        if not local:
+            continue
         for c in local.get("components") or []:
             add(c)
         raw_deps.extend(local.get("dependencies") or [])
